@@ -1,0 +1,6 @@
+sauron
+dist/
+*.db
+*.pid
+*.log
+.DS_Store
