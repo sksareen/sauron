@@ -481,9 +481,9 @@ class AnnotationWindow: NSPanel {
 
     func registerScreenshot(_ path: String) {
         let candidates = [
+            "/usr/local/bin/sauron",
             FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("coding/sauron/sauron").path,
-            "/usr/local/bin/sauron"
+                .appendingPathComponent("go/bin/sauron").path
         ]
         guard let binary = candidates.first(where: {
             FileManager.default.isExecutableFile(atPath: $0)

@@ -39,7 +39,7 @@ func TestScrubEmail(t *testing.T) {
 }
 
 func TestScrubHomePaths(t *testing.T) {
-	got := Scrub("file at /Users/savar/coding/project/main.go")
+	got := Scrub("file at /Users/testuser/coding/project/main.go")
 	if strings.Contains(got, "/Users/savar") {
 		t.Errorf("home path not scrubbed: %q", got)
 	}
@@ -72,7 +72,7 @@ func TestScrubPreservesNormalText(t *testing.T) {
 
 func TestScrubRecord(t *testing.T) {
 	rec := &store.ExperienceRecord{
-		TaskIntent:    "Deploy to /Users/savar/coding/project",
+		TaskIntent:    "Deploy to /Users/testuser/coding/project",
 		Approach:      "Used api_key = 'sk-or-v1-abc123def456ghi789' to authenticate",
 		ToolsUsed:     []string{"go", "docker"},
 		FailurePoints: []string{"user@example.com bounced"},
