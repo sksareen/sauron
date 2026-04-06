@@ -86,6 +86,24 @@ AFTER DELETE ON clipboard_history BEGIN
     VALUES ('delete', old.id, old.content, old.source_app, old.window_title);
 END;
 
+CREATE TABLE IF NOT EXISTS experiences (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_intent     TEXT NOT NULL,
+    approach        TEXT NOT NULL,
+    tools_used      TEXT,
+    failure_points  TEXT,
+    resolution      TEXT,
+    outcome         TEXT NOT NULL CHECK(outcome IN ('success', 'failure', 'partial')),
+    tags            TEXT,
+    source          TEXT,
+    embedding       BLOB,
+    created_at      TEXT DEFAULT (datetime('now')),
+    updated_at      TEXT DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_experiences_outcome    ON experiences(outcome);
+CREATE INDEX IF NOT EXISTS idx_experiences_created_at ON experiences(created_at);
+
 CREATE TRIGGER IF NOT EXISTS clipboard_fts_update
 AFTER UPDATE ON clipboard_history BEGIN
     INSERT INTO clipboard_fts(clipboard_fts, rowid, content, source_app, window_title)

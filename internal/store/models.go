@@ -54,6 +54,22 @@ type SearchResult struct {
 	Rank        float64 `json:"rank"`
 }
 
+// ExperienceRecord represents a logged agent experience in the experience graph.
+type ExperienceRecord struct {
+	ID            int64    `json:"id,omitempty"`
+	TaskIntent    string   `json:"task_intent"`
+	Approach      string   `json:"approach"`
+	ToolsUsed     []string `json:"tools_used,omitempty"`
+	FailurePoints []string `json:"failure_points,omitempty"`
+	Resolution    string   `json:"resolution,omitempty"`
+	Outcome       string   `json:"outcome"`
+	Tags          []string `json:"tags,omitempty"`
+	Source        string   `json:"source,omitempty"`
+	Embedding     []byte   `json:"embedding,omitempty"`
+	CreatedAt     string   `json:"created_at,omitempty"`
+	UpdatedAt     string   `json:"updated_at,omitempty"`
+}
+
 // IntentTrace represents a detected outcome and the activity trace leading to it.
 type IntentTrace struct {
 	ID                   int64   `json:"id"`

@@ -31,7 +31,7 @@ const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>`
 
-const claudeMDHint = "\n<!-- sauron -->\nYou have access to sauron tools (sauron_context, sauron_clipboard, sauron_activity, sauron_search) for real-time context about what the user is working on.\n<!-- /sauron -->"
+const claudeMDHint = "\n<!-- sauron -->\nYou have access to sauron tools for real-time context and agent memory:\n- Watcher: sauron_context, sauron_clipboard, sauron_activity, sauron_search, sauron_recall, sauron_timeline, sauron_screenshots\n- Experience graph: sauron_check_experience (search past experiences before starting tasks), sauron_log_experience (record completed tasks), sauron_experience_stats\nCheck sauron_context at session start. Check sauron_check_experience before non-trivial tasks. Log experiences after completing tasks.\n<!-- /sauron -->"
 
 // Install sets up the LaunchAgent and MCP registration.
 func Install() error {

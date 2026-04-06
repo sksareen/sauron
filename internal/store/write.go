@@ -1,6 +1,9 @@
 package store
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // InsertClipboard inserts a new clipboard capture.
 func InsertClipboard(db *DB, content, contentType, sourceApp, bundleID, windowTitle string) error {
@@ -79,4 +82,53 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
 		return fmt.Errorf("insert intent trace: %w", err)
 	}
 	return nil
+}
+
+// InsertExperience inserts a new experience record and returns its ID.
+func InsertExperience(db *DB, exp *ExperienceRecord) (int64, error) {
+	const q = `
+INSERT INTO experiences (task_intent, approach, tools_used, failure_points, resolution, outcome, tags, source, embedding)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	toolsJSON, _ := json.Marshal(exp.ToolsUsed)
+	failJSON, _ := json.Marshal(exp.FailurePoints)
+	tagsJSON, _ := json.Marshal(exp.Tags)
+
+	// Store nil for empty slices.
+	var toolsStr, failStr, tagsStr *string
+	if len(exp.ToolsUsed) > 0 {
+		s := string(toolsJSON)
+		toolsStr = &s
+	}
+	if len(exp.FailurePoints) > 0 {
+		s := string(failJSON)
+		failStr = &s
+	}
+	if len(exp.Tags) > 0 {
+		s := string(tagsJSON)
+		tagsStr = &s
+	}
+
+	var embeddingBlob []byte
+	if len(exp.Embedding) > 0 {
+		embeddingBlob = exp.Embedding
+	}
+
+	res, err := db.Exec(q, exp.TaskIntent, exp.Approach, toolsStr, failStr,
+		nilIfEmpty(exp.Resolution), exp.Outcome, tagsStr, nilIfEmpty(exp.Source), embeddingBlob)
+	if err != nil {
+		return 0, fmt.Errorf("insert experience: %w", err)
+	}
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, fmt.Errorf("last insert id: %w", err)
+	}
+	return id, nil
+}
+
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

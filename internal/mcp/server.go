@@ -3,24 +3,28 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
+	"github.com/sksareen/sauron/internal/embed"
 	"github.com/sksareen/sauron/internal/query"
+	"github.com/sksareen/sauron/internal/scrub"
 	"github.com/sksareen/sauron/internal/store"
 )
 
 // Start launches a stdio MCP server that exposes sauron tools.
 // It blocks until stdin is closed or an error occurs.
 func Start() error {
-	db, err := store.OpenReadOnly()
+	// Open read-write: experience tools need write access.
+	db, err := store.Open()
 	if err != nil {
 		return fmt.Errorf("mcp: %w", err)
 	}
 	defer db.Close()
 
-	s := server.NewMCPServer("sauron", "0.1.0",
+	s := server.NewMCPServer("sauron", "0.2.0",
 		server.WithToolCapabilities(true),
 	)
 
@@ -179,5 +183,151 @@ func Start() error {
 		},
 	)
 
+	// ── experience graph tools ─────────────────────────────────────────────
+
+	// sauron_check_experience — semantic search over agent experiences
+	s.AddTool(
+		mcp.NewTool("sauron_check_experience",
+			mcp.WithDescription("Search the agent experience graph for relevant past experiences before starting a task. Returns approaches that worked, failures to avoid, and tools that helped."),
+			mcp.WithString("task_description",
+				mcp.Description("What you're about to do — be specific about the goal"),
+				mcp.Required(),
+			),
+			mcp.WithString("context",
+				mcp.Description("Optional context: tools, constraints, environment"),
+			),
+			mcp.WithNumber("limit",
+				mcp.Description("Max results to return (default: 5)"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			taskDesc, err := req.RequireString("task_description")
+			if err != nil {
+				return mcp.NewToolResultError("task_description parameter required"), nil
+			}
+			ctxStr, _ := req.RequireString("context")
+			limit := req.GetInt("limit", 5)
+			if limit <= 0 {
+				limit = 5
+			}
+
+			results, total, err := query.CheckExperience(db, taskDesc, ctxStr, limit)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(query.FormatCheckExperience(results, total, "human")), nil
+		},
+	)
+
+	// sauron_log_experience — record a completed task
+	s.AddTool(
+		mcp.NewTool("sauron_log_experience",
+			mcp.WithDescription("Log a completed task to the agent experience graph so future agents can learn from it. Records what worked, what failed, and how issues were resolved."),
+			mcp.WithString("task_intent",
+				mcp.Description("What was the task? Be specific about the goal."),
+				mcp.Required(),
+			),
+			mcp.WithString("approach",
+				mcp.Description("What approach did you take? Include key decisions and steps."),
+				mcp.Required(),
+			),
+			mcp.WithString("outcome",
+				mcp.Description("Result: success, failure, or partial"),
+				mcp.Required(),
+			),
+			mcp.WithString("tools_used",
+				mcp.Description("Comma-separated list of tools/technologies used"),
+			),
+			mcp.WithString("failure_points",
+				mcp.Description("Comma-separated list of things that went wrong"),
+			),
+			mcp.WithString("resolution",
+				mcp.Description("How failures were fixed"),
+			),
+			mcp.WithString("tags",
+				mcp.Description("Comma-separated tags for categorization"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			taskIntent, err := req.RequireString("task_intent")
+			if err != nil {
+				return mcp.NewToolResultError("task_intent required"), nil
+			}
+			approach, err := req.RequireString("approach")
+			if err != nil {
+				return mcp.NewToolResultError("approach required"), nil
+			}
+			outcome, err := req.RequireString("outcome")
+			if err != nil {
+				return mcp.NewToolResultError("outcome required"), nil
+			}
+			if outcome != "success" && outcome != "failure" && outcome != "partial" {
+				return mcp.NewToolResultError("outcome must be success, failure, or partial"), nil
+			}
+
+			rec := &store.ExperienceRecord{
+				TaskIntent: taskIntent,
+				Approach:   approach,
+				Outcome:    outcome,
+				Source:     "live",
+			}
+
+			if tools, _ := req.RequireString("tools_used"); tools != "" {
+				rec.ToolsUsed = splitCSV(tools)
+			}
+			if fails, _ := req.RequireString("failure_points"); fails != "" {
+				rec.FailurePoints = splitCSV(fails)
+			}
+			if res, _ := req.RequireString("resolution"); res != "" {
+				rec.Resolution = res
+			}
+			if tags, _ := req.RequireString("tags"); tags != "" {
+				rec.Tags = splitCSV(tags)
+			}
+
+			// Scrub sensitive data.
+			scrub.ScrubRecord(rec)
+
+			// Generate embedding.
+			embText := rec.TaskIntent + "\n" + rec.Approach
+			if vec, err := embed.GetEmbedding(embText); err == nil && vec != nil {
+				rec.Embedding = embed.VectorToBytes(vec)
+			}
+
+			id, err := store.InsertExperience(db, rec)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			count, _ := store.GetExperienceCount(db)
+			return mcp.NewToolResultText(fmt.Sprintf("Experience logged (id: %d). Graph now has %d records.", id, count)), nil
+		},
+	)
+
+	// sauron_experience_stats — graph statistics
+	s.AddTool(
+		mcp.NewTool("sauron_experience_stats",
+			mcp.WithDescription("Get statistics about the agent experience graph: total records, success/failure/partial breakdown."),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			total, success, failure, partial, err := store.GetExperienceStats(db)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(query.FormatExperienceStats(total, success, failure, partial, "human")), nil
+		},
+	)
+
 	return server.ServeStdio(s)
+}
+
+// splitCSV splits a comma-separated string into trimmed, non-empty parts.
+func splitCSV(s string) []string {
+	var parts []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return parts
 }

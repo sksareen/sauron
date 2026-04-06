@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 )
 
@@ -294,6 +295,111 @@ ORDER BY captured_at ASC`
 		items = append(items, s)
 	}
 	return items, rows.Err()
+}
+
+// GetExperienceCount returns the total number of experience records.
+func GetExperienceCount(db *DB) (int, error) {
+	var count int
+	err := db.QueryRow("SELECT COUNT(*) FROM experiences").Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count experiences: %w", err)
+	}
+	return count, nil
+}
+
+// GetExperiencesWithEmbeddings returns all experiences that have embeddings.
+func GetExperiencesWithEmbeddings(db *DB) ([]ExperienceRecord, error) {
+	const q = `
+SELECT id, task_intent, approach, COALESCE(tools_used,''), COALESCE(failure_points,''),
+       COALESCE(resolution,''), outcome, COALESCE(tags,''), COALESCE(source,''),
+       embedding, COALESCE(created_at,'')
+FROM experiences
+WHERE embedding IS NOT NULL`
+
+	rows, err := db.Query(q)
+	if err != nil {
+		return nil, fmt.Errorf("query experiences with embeddings: %w", err)
+	}
+	defer rows.Close()
+
+	return scanExperienceRows(rows)
+}
+
+// SearchExperiencesByText performs a LIKE-based text search across experiences.
+func SearchExperiencesByText(db *DB, query string, limit int) ([]ExperienceRecord, error) {
+	const q = `
+SELECT id, task_intent, approach, COALESCE(tools_used,''), COALESCE(failure_points,''),
+       COALESCE(resolution,''), outcome, COALESCE(tags,''), COALESCE(source,''),
+       embedding, COALESCE(created_at,'')
+FROM experiences
+WHERE task_intent LIKE ? OR approach LIKE ? OR tags LIKE ?
+ORDER BY created_at DESC
+LIMIT ?`
+
+	pattern := "%" + query + "%"
+	rows, err := db.Query(q, pattern, pattern, pattern, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search experiences: %w", err)
+	}
+	defer rows.Close()
+
+	return scanExperienceRows(rows)
+}
+
+// GetRecentExperiences returns the most recent n experience records.
+func GetRecentExperiences(db *DB, n int) ([]ExperienceRecord, error) {
+	const q = `
+SELECT id, task_intent, approach, COALESCE(tools_used,''), COALESCE(failure_points,''),
+       COALESCE(resolution,''), outcome, COALESCE(tags,''), COALESCE(source,''),
+       embedding, COALESCE(created_at,'')
+FROM experiences
+ORDER BY created_at DESC
+LIMIT ?`
+
+	rows, err := db.Query(q, n)
+	if err != nil {
+		return nil, fmt.Errorf("query recent experiences: %w", err)
+	}
+	defer rows.Close()
+
+	return scanExperienceRows(rows)
+}
+
+// GetExperienceStats returns outcome counts.
+func GetExperienceStats(db *DB) (total, success, failure, partial int, err error) {
+	err = db.QueryRow("SELECT COUNT(*) FROM experiences").Scan(&total)
+	if err != nil {
+		return
+	}
+	db.QueryRow("SELECT COUNT(*) FROM experiences WHERE outcome='success'").Scan(&success)
+	db.QueryRow("SELECT COUNT(*) FROM experiences WHERE outcome='failure'").Scan(&failure)
+	db.QueryRow("SELECT COUNT(*) FROM experiences WHERE outcome='partial'").Scan(&partial)
+	return
+}
+
+func scanExperienceRows(rows *sql.Rows) ([]ExperienceRecord, error) {
+	var records []ExperienceRecord
+	for rows.Next() {
+		var e ExperienceRecord
+		var toolsStr, failStr, tagsStr string
+		var embBlob []byte
+		if err := rows.Scan(&e.ID, &e.TaskIntent, &e.Approach, &toolsStr, &failStr,
+			&e.Resolution, &e.Outcome, &tagsStr, &e.Source, &embBlob, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan experience row: %w", err)
+		}
+		if toolsStr != "" {
+			json.Unmarshal([]byte(toolsStr), &e.ToolsUsed)
+		}
+		if failStr != "" {
+			json.Unmarshal([]byte(failStr), &e.FailurePoints)
+		}
+		if tagsStr != "" {
+			json.Unmarshal([]byte(tagsStr), &e.Tags)
+		}
+		e.Embedding = embBlob
+		records = append(records, e)
+	}
+	return records, rows.Err()
 }
 
 // SearchAll performs FTS search across clipboard content.
