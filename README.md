@@ -8,6 +8,10 @@ It watches your clipboard, tracks which apps you're using, takes screenshots, de
 
 One binary. One database. 10 MCP tools. Zero cloud dependencies.
 
+<p align="center">
+  <img src="assets/demo.gif" alt="Sauron demo — Claude Code calling sauron_activity and sauron_context" width="800">
+</p>
+
 ---
 
 ## Quick Start
