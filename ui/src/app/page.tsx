@@ -84,24 +84,8 @@ type Snapshot = {
     generated_at: number;
   } | null;
   experience: { total: number; success: number; failure: number; partial: number };
-  hints: {
-    id: string;
-    label: string;
-    confidence: number;
-    weight: number;
-    status: string;
-    dominant_app: string;
-    started_at: number;
-    last_active_at: number;
-    evidence_count: number;
-    evidence: {
-      id: number;
-      ts: number;
-      summary: string;
-      app_name: string;
-      severity: string;
-    }[];
-  }[];
+  hints: HintEntry[];
+  recent_hints: HintEntry[];
   edits: {
     ts: number;
     rel: string;
@@ -110,6 +94,19 @@ type Snapshot = {
     removed: number;
     preview: string;
   }[];
+};
+
+type HintEntry = {
+  id: string;
+  label: string;
+  confidence: number;
+  weight: number;
+  status: string;
+  dominant_app: string;
+  started_at: number;
+  last_active_at: number;
+  evidence_count: number;
+  evidence: { id: number; ts: number; summary: string; app_name: string; severity: string }[];
 };
 
 const POLL_MS = 2000;
@@ -162,7 +159,7 @@ function plural(n: number, one: string, many = `${one}s`): string {
 }
 
 type Severity = "ok" | "warn" | "error";
-type Category = "clipboard" | "edit" | "trace" | "session" | "activity" | "other";
+type Category = "clipboard" | "voice" | "edit" | "trace" | "session" | "activity" | "other";
 
 type LogItem = {
   id: string;
@@ -196,6 +193,7 @@ function iconFor(category: Category, kind: string, severity: Severity): string {
     if (severity === "warn") return "⚠";
     return "✓";
   }
+  if (category === "voice") return "🎙";
   if (category === "clipboard") return "📋";
   if (category === "edit") return "✎";
   if (category === "session") return "⚡";
@@ -233,14 +231,16 @@ function buildLog(
 
   for (const c of clipboard) {
     const flat = c.content.replace(/\s+/g, " ").trim();
-    const head = c.source_app ? `[${c.source_app}] ` : "";
+    const isVoice = c.source_app === "Wispr Flow";
+    const category: Category = isVoice ? "voice" : "clipboard";
+    const head = isVoice ? "" : (c.source_app ? `[${c.source_app}] ` : "");
     items.push({
       id: `cb-${c.id}`,
       timestamp: c.captured_at,
-      category: "clipboard",
-      kind: "clipboard",
+      category,
+      kind: category,
       severity: "ok",
-      icon: iconFor("clipboard", "clipboard", "ok"),
+      icon: iconFor(category, category, "ok"),
       text: truncate(head + flat, 120),
       full: c.content,
       app: c.source_app,
@@ -403,7 +403,7 @@ function chapterNarrative(
   s: Session,
   firstIds: Set<string>,
 ): { title: string; summary: string; severity: Severity; hasFirst: boolean } {
-  const cat = { clipboard: 0, edit: 0, trace: 0, session: 0, activity: 0, other: 0 };
+  const cat = { clipboard: 0, voice: 0, edit: 0, trace: 0, session: 0, activity: 0, other: 0 };
   const appCount: Record<string, number> = {};
   const fileCount: Record<string, number> = {};
   let errors = 0;
@@ -778,6 +778,10 @@ export default function Page() {
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
   const [copied, setCopied] = useState<string | null>(null);
   const [firstIds, setFirstIds] = useState<Set<string>>(new Set());
+  const [liveExpanded, setLiveExpanded] = useState(false);
+  const [livePage, setLivePage] = useState(1);
+  const [earlierOpen, setEarlierOpen] = useState(false);
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
   const firstSeenRef = useRef<Set<string> | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -845,6 +849,7 @@ export default function Page() {
   const activity = snap?.activity;
   const reentry = snap?.reentry ?? null;
   const hints = useMemo(() => snap?.hints ?? [], [snap]);
+  const recentHints = useMemo(() => snap?.recent_hints ?? [], [snap]);
   const timeline = useMemo(() => snap?.timeline ?? [], [snap]);
   const clipboard = useMemo(() => snap?.clipboard ?? [], [snap]);
   const traces = useMemo(() => snap?.traces ?? [], [snap]);
@@ -853,7 +858,6 @@ export default function Page() {
   const apps = activity
     ? Object.entries(activity.app_breakdown).sort(([, a], [, b]) => b - a)
     : [];
-  const topHours = apps[0]?.[1] ?? 1;
   const totalHours = apps.reduce((s, [, h]) => s + h, 0);
 
   const log = useMemo(
@@ -983,6 +987,21 @@ export default function Page() {
     return () => clearTimeout(t);
   }, [snap]);
 
+  // Infinite scroll: load more live events when sentinel enters viewport
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => { if (entry.isIntersecting) setLivePage((p) => p + 1); },
+      { threshold: 0.1 },
+    );
+    obs.observe(sentinelRef.current);
+    return () => obs.disconnect();
+  }, [liveExpanded]);
+
+  const PAGE_SIZE = 20;
+  const expandedLog = log.slice(0, livePage * PAGE_SIZE);
+  const hasMore = expandedLog.length < log.length;
+
   return (
     <main className="mx-auto max-w-6xl px-5 py-8 sm:px-8 lg:py-10">
       <header className="flex items-center justify-between">
@@ -995,7 +1014,7 @@ export default function Page() {
           ) : status === undefined ? (
             <span>checking</span>
           ) : status.running ? (
-            <span className="pulse">pid {status.pid}</span>
+            <span className="pulse">● {status.pid}</span>
           ) : (
             <span className="text-[var(--color-signal)]">daemon stopped</span>
           )}
@@ -1007,252 +1026,49 @@ export default function Page() {
         <PausedPanel />
       ) : (
         <>
-      <section className="mt-8 grid gap-4 lg:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.75fr)]">
-        <ReentryPanel reentry={reentry} context={context} edits={edits} hints={hints} />
-        <NowPanel
-          context={context}
-          rateBuckets={rateBuckets}
-          direction={direction}
-          eventsLast30={eventsLast30}
-          flow={flow}
-        />
+      {/* Row 1: Current thread + all threads — full width */}
+      <section className="mt-8">
+        <ContextPanel reentry={reentry} context={context} edits={edits} hints={hints} recentHints={recentHints} now={now} />
       </section>
 
-      <details className="mt-4 border border-[var(--color-rule)] bg-[var(--color-paper-soft)] px-5 py-4">
-        <summary className="cursor-pointer list-none">
-          <div className="flex items-baseline justify-between">
-            <div>
-              <div className="eyebrow">diagnostics</div>
-              <div className="mt-1 text-[12px] text-[var(--color-ink-soft)]">
-                flow windows, interruptions, and model diagnostics
-              </div>
-            </div>
-            <div className="text-right text-[12px] tnum text-[var(--color-ink-soft)]">
-              {flowStats.flows} flow · {flowStats.interruptions} interrupted
-            </div>
-          </div>
-        </summary>
+      {/* Row 2: Activity — collapsible */}
+      <ActivitySection
+        rateBuckets={rateBuckets}
+        direction={direction}
+        eventsLast30={eventsLast30}
+        switches={activity?.switches ?? 0}
+        flow={flow}
+        liveEvents={liveEvents}
+        expanded={expanded}
+        copied={copied}
+        onToggle={toggle}
+        onPermalink={copyPermalink}
+      />
 
-        <div className="mt-4 flex items-baseline justify-between border-t border-[var(--color-rule)] pt-4">
-          <div>
-            <div className="eyebrow">attention signals</div>
-            <div className="mt-1 text-[12px] text-[var(--color-ink-soft)]">
-              last 2h · threshold &gt;=10m · avg focus &gt;=70%
-            </div>
-          </div>
-          <div className="text-right text-[12px] tnum text-[var(--color-ink-soft)]">
-            {flowStats.flows} flow · {flowStats.interruptions} interrupted
-          </div>
-        </div>
+      {/* Row 3: Last 24h — collapsible */}
+      {apps.length > 0 && (
+        <Last24hSection apps={apps} totalHours={totalHours} />
+      )}
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-3 tnum">
-          <div>
-            <span className="text-[22px] font-bold text-[var(--color-ink)]">
-              {flowStats.flows}
-            </span>
-            <span className="ml-1.5 text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-soft)]">
-              flow windows
-            </span>
-          </div>
-          <div>
-            <span className="text-[22px] font-bold text-[var(--color-ink)]">
-              {fmtDur(0, flowStats.flowTime)}
-            </span>
-            <span className="ml-1.5 text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-soft)]">
-              in flow
-            </span>
-          </div>
-          <div>
-            <span className="text-[22px] font-bold text-[var(--color-signal)]">
-              {flowStats.interruptions}
-            </span>
-            <span className="ml-1.5 text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-soft)]">
-              interruptions{flowStats.notifyInterruptions > 0 && ` · ${flowStats.notifyInterruptions} from notify apps`}
-            </span>
-          </div>
-          {flowStats.almosts > 0 && (
-            <div>
-              <span className="text-[24px] font-bold text-[var(--color-accent)]">
-                {flowStats.almosts}
-              </span>
-              <span className="ml-1.5 text-[12px] uppercase tracking-[0.14em] text-[var(--color-ink-soft)]">
-                almost-flow (5–10m)
-              </span>
-            </div>
-          )}
-        </div>
+      {/* Row 4: Interrupts — collapsible, replaces diagnostics */}
+      <InterruptsSection flowStats={flowStats} flowWindows={flowWindows} />
 
-        <div className="mt-3 flex flex-wrap items-baseline gap-x-5 gap-y-1.5 text-[12px] text-[var(--color-ink-soft)] tnum">
-          <div>
-            <span className="text-[var(--color-ink-faint)]">re-entry</span>{" "}
-            <span className="font-medium text-[var(--color-ink)]">
-              {flowStats.reEntryCount > 0
-                ? `~${fmtDur(0, Math.round(flowStats.reEntryMedian))} median`
-                : "no data yet"}
-            </span>
-            {flowStats.reEntryMax > 0 && flowStats.reEntryCount > 1 && (
-              <span className="text-[var(--color-ink-faint)]">
-                {" "}
-                · max {fmtDur(0, Math.round(flowStats.reEntryMax))}
-              </span>
-            )}
-          </div>
-          <div>
-            <span className="text-[var(--color-ink-faint)]">interrupt split</span>{" "}
-            <span className="font-medium text-[var(--color-signal)]">{flowStats.exo}</span>{" "}
-            <span className="text-[var(--color-ink-faint)]">exo /</span>{" "}
-            <span className="font-medium text-[var(--color-accent)]">{flowStats.endo}</span>{" "}
-            <span className="text-[var(--color-ink-faint)]">endo</span>
-          </div>
-          <div>
-            <span className="text-[var(--color-ink-faint)]">μ-lapses in flow</span>{" "}
-            <span className="font-medium text-[var(--color-ink)]">
-              {flowStats.totalLapses}
-            </span>
-          </div>
-        </div>
 
-        <details className="mt-4 border-t border-[var(--color-rule)] pt-3">
-          <summary className="cursor-pointer text-[12px] uppercase tracking-[0.14em] text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]">
-            show flow validation rows
-          </summary>
-          <div className="mt-3 overflow-x-auto">
-            {flowWindows.length === 0 ? (
-              <div className="py-3 text-[13px] text-[var(--color-ink-soft)]">
-                no session samples in snapshot.
-              </div>
-            ) : (
-              <ul className="min-w-[760px] divide-y divide-[var(--color-rule)]">
-                {flowWindows.map((w) => {
-                  const badge = w.isFlow ? "FLOW" : w.isAlmost ? "ALMOST" : "scatter";
-                const badgeClass = w.isFlow
-                  ? "text-[var(--color-accent)]"
-                  : w.isAlmost
-                    ? "text-[var(--color-accent)]"
-                    : "text-[var(--color-ink-faint)]";
-                const rowClass = w.isFlow
-                  ? ""
-                  : w.isAlmost
-                    ? "opacity-90"
-                    : "opacity-60";
-                const trigger = w.endedBy
-                  ? `→ ${w.endedBy.app}${w.endedBy.isNotify ? " (notify)" : ""}`
-                  : "→ still ongoing";
-                const attr = w.attribution;
-                const focusDropPct = attr
-                  ? Math.round((attr.focusBefore - attr.focusAfter) * 100)
-                  : 0;
-                  return (
-                    <li key={w.id} className={`py-2 ${rowClass}`}>
-                    <div className="grid grid-cols-[110px_52px_1fr_44px_84px_1fr] items-baseline gap-3 font-mono text-[12.5px] tnum">
-                      <span className="text-[var(--color-ink-soft)]">
-                        {fmtClock(w.startTs)}–{fmtClock(w.endTs)}
-                      </span>
-                      <span className="text-[var(--color-ink)]">
-                        {fmtDur(0, w.durationSec)}
-                      </span>
-                      <span className="truncate text-[var(--color-ink)]">{w.app}</span>
-                      <span className="text-right text-[var(--color-ink-soft)]">
-                        {Math.round(w.avgFocus * 100)}%
-                      </span>
-                      <span className={`${badgeClass} tracking-wide`}>{badge}</span>
-                      <span
-                        className={`truncate ${
-                          w.endedBy?.isNotify
-                            ? "text-[var(--color-signal)]"
-                            : "text-[var(--color-ink-faint)]"
-                        }`}
-                      >
-                        {trigger}
-                      </span>
-                    </div>
-
-                    {attr && (
-                      <div className="ml-[122px] mt-1.5 space-y-1 border-l-2 border-[var(--color-rule)] pl-3 text-[12px] text-[var(--color-ink-soft)]">
-                        {attr.triggers.length > 0 ? (
-                          attr.triggers.map((t, i) => (
-                            <div
-                              key={i}
-                              className={`flex items-baseline gap-2 ${
-                                t.isNotify ? "text-[var(--color-signal)]" : ""
-                              }`}
-                            >
-                              <span className="font-mono text-[11px] tnum text-[var(--color-ink-faint)]">
-                                {fmtClockFull(t.ts)}
-                              </span>
-                              <span className="flex-1">{t.summary}</span>
-                            </div>
-                          ))
-                        ) : (
-                          <div className="italic text-[var(--color-ink-faint)]">
-                            no explicit trigger event captured in ±90s window
-                          </div>
-                        )}
-                        <div className="text-[11px] text-[var(--color-ink-faint)] pt-0.5">
-                          focus {Math.round(attr.focusBefore * 100)}% →{" "}
-                          {Math.round(attr.focusAfter * 100)}%
-                          {focusDropPct >= 20 && (
-                            <span className="ml-1 text-[var(--color-signal)]">
-                              (−{focusDropPct}pt)
-                            </span>
-                          )}
-                          {attr.appsAddedAfter.length > 0 &&
-                            ` · +apps ${attr.appsAddedAfter.slice(0, 3).join(", ")}`}
-                          {attr.sessionTypeBefore !== attr.sessionTypeAfter &&
-                            ` · ${attr.sessionTypeBefore} → ${attr.sessionTypeAfter}`}
-                        </div>
-                        <div className="pt-0.5 text-[11px] text-[var(--color-ink-faint)]">
-                          {w.interruptType && (
-                            <span
-                              className={
-                                w.interruptType === "exo"
-                                  ? "text-[var(--color-signal)]"
-                                  : w.interruptType === "endo"
-                                    ? "text-[var(--color-accent)]"
-                                    : ""
-                              }
-                            >
-                              {w.interruptType === "exo"
-                                ? "exogenous"
-                                : w.interruptType === "endo"
-                                  ? "endogenous (mind-wandered)"
-                                  : "unclassified"}
-                            </span>
-                          )}
-                          {w.isFlow && (
-                            <>
-                              {w.interruptType && " · "}
-                              μ-lapses in window: {w.microLapses}
-                              {w.reEntrySec !== undefined && (
-                                <>
-                                  {" · re-entered after "}
-                                  <span
-                                    className={
-                                      w.reEntrySec > 15 * 60
-                                        ? "text-[var(--color-signal)]"
-                                        : "text-[var(--color-ink-soft)]"
-                                    }
-                                  >
-                                    {fmtDur(0, w.reEntrySec)}
-                                  </span>
-                                </>
-                              )}
-                              {w.reEntrySec === undefined &&
-                                w.endedBy &&
-                                " · never re-entered flow in this window"}
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+      <section className="mt-8">
+        <button
+          onClick={() => setEarlierOpen((o) => !o)}
+          className="w-full flex items-baseline justify-between hover:text-[var(--color-ink)] transition-colors cursor-pointer mb-4"
+        >
+          <div className="eyebrow">earlier today</div>
+          <div className="flex items-center gap-3 text-[12px] tnum text-[var(--color-ink-soft)]">
+            {reconnecting && <span className="text-[var(--color-signal)]">↻</span>}
+            <span>{earlierOpen ? "collapse ↑" : `${recentHints.filter(h => h.label !== "").length} threads ↓`}</span>
           </div>
-        </details>
-      </details>
+        </button>
+        {earlierOpen && (
+          <EarlierByThread hints={recentHints} log={olderEvents} now={now} copied={copied} onCopy={copyPermalink} onToggle={toggle} expanded={expanded} />
+        )}
+      </section>
 
       <section className="mt-12">
         <div className="flex items-baseline justify-between">
@@ -1266,99 +1082,61 @@ export default function Page() {
           </div>
         </div>
         <div className="rule mt-3 pt-3">
-          {liveEvents.length === 0 ? (
-            <div className="py-4 text-[13px] text-[var(--color-ink-soft)]">
-              no activity in the last 5 minutes.
-            </div>
-          ) : (
-            <ul>
-              {liveEvents.map((it) => (
-                <li key={it.id}>
-                  <LogLine
-                    item={it}
-                    isOpen={expanded.has(it.id)}
-                    onToggle={() => it.full && toggle(it.id)}
-                    onPermalink={() => copyPermalink(it.id)}
-                    copied={copied === it.id}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      <section className="mt-14">
-        <div className="flex items-baseline justify-between">
-          <div className="eyebrow">last 24h</div>
-          {activity && (
-            <div className="text-[12px] tnum text-[var(--color-ink-soft)]">
-              {activity.switches} switches · {activity.total_apps} apps
-            </div>
-          )}
-        </div>
-        <div className="rule mt-3 pt-6">
-          {activity ? (
+          {!liveExpanded ? (
             <>
-              <div className="mb-6 flex items-baseline gap-4">
-                <div className="text-[28px] font-bold tnum leading-none">
-                  {fmtHrs(totalHours)}
+              {liveEvents.length === 0 ? (
+                <div className="py-4 text-[13px] text-[var(--color-ink-soft)]">
+                  no activity in the last 5 minutes.
                 </div>
-                <div className="text-[12px] uppercase tracking-[0.14em] text-[var(--color-ink-soft)]">
-                  tracked
-                </div>
-              </div>
-              <div className="space-y-3">
-                {apps.map(([name, h]) => (
-                  <div
-                    key={name}
-                    className="grid grid-cols-[160px_1fr_72px] items-center gap-4"
-                  >
-                    <div className="truncate text-[14px] text-[var(--color-ink)]">
-                      {name}
-                    </div>
-                    <div className="h-[3px] rounded bg-[var(--color-rule)]">
-                      <div
-                        className="h-full rounded bg-[var(--color-accent)]"
-                        style={{ width: `${(h / topHours) * 100}%` }}
-                      />
-                    </div>
-                    <div className="text-right text-[13px] tnum text-[var(--color-ink-soft)]">
-                      {fmtHrs(h)}
-                    </div>
-                  </div>
-                ))}
-              </div>
+              ) : (
+                <ul>
+                  {liveEvents.map((it) => (
+                    <li key={it.id}>
+                      <LogLine item={it} isOpen={expanded.has(it.id)}
+                        onToggle={() => it.full && toggle(it.id)}
+                        onPermalink={() => copyPermalink(it.id)} copied={copied === it.id} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <button
+                onClick={() => { setLiveExpanded(true); setLivePage(1); }}
+                className="mt-3 text-[12px] text-[var(--color-ink-soft)] hover:text-[var(--color-accent)] transition-colors cursor-pointer"
+              >
+                show all activity ({log.length} events) ↓
+              </button>
             </>
           ) : (
-            <div className="py-4 text-[13px] leading-[1.55] text-[var(--color-ink-soft)]">
-              no activity summary available. start the daemon to populate this view.
-            </div>
+            <>
+              <div className="flex items-baseline justify-between mb-2">
+                <span className="text-[12px] text-[var(--color-ink-soft)] tnum">{log.length} events total</span>
+                <button onClick={() => setLiveExpanded(false)}
+                  className="text-[12px] text-[var(--color-ink-soft)] hover:text-[var(--color-accent)] transition-colors cursor-pointer">
+                  collapse ↑
+                </button>
+              </div>
+              <ul>
+                {expandedLog.map((it) => (
+                  <li key={it.id}>
+                    <LogLine item={it} isOpen={expanded.has(it.id)}
+                      onToggle={() => it.full && toggle(it.id)}
+                      onPermalink={() => copyPermalink(it.id)} copied={copied === it.id} />
+                  </li>
+                ))}
+              </ul>
+              {hasMore && (
+                <div ref={sentinelRef} className="py-4 text-center text-[12px] text-[var(--color-ink-faint)]">
+                  loading more…
+                </div>
+              )}
+            </>
           )}
         </div>
       </section>
 
-      <section className="mt-14">
-        <div className="flex items-baseline justify-between">
-          <div className="eyebrow">earlier</div>
-          <div className="flex items-center gap-4 text-[12px] text-[var(--color-ink-soft)]">
-            {reconnecting && (
-              <span className="text-[var(--color-signal)] tnum">↻ reconnecting</span>
-            )}
-            <span className="tnum">
-              {olderEvents.length} events · {sessions.length} moments
-            </span>
-          </div>
-        </div>
-        <div className="mt-4">
-          {sessions.length === 0 ? (
-            <div className="rule pt-4">
-              <div className="py-4 text-[13px] leading-[1.55] text-[var(--color-ink-soft)]">
-                no earlier moments yet.
-              </div>
-            </div>
-          ) : (
-            sessions.map((s, idx) => {
+      {/* dead section closing tag */}
+      <section className="hidden">
+        {false && sessions.map((s, idx) => {
               const narrative = chapterNarrative(s, firstIds);
               const orderedEvents = [...s.items].sort((a, b) => a.timestamp - b.timestamp);
               const age = fmtRel(s.firstTs, now);
@@ -1464,9 +1242,7 @@ export default function Page() {
                   </ul>
                 </section>
               );
-            })
-          )}
-        </div>
+            })}
       </section>
 
       <footer className="mt-20 flex items-center justify-between rule pt-6 text-[11px] text-[var(--color-ink-faint)] tnum">
@@ -1595,7 +1371,7 @@ function formatEvidenceSummary(
 
 function PausedPanel() {
   return (
-    <section className="mt-8 border border-[var(--color-rule)] bg-[var(--color-paper-soft)] px-5 py-6 md:px-6">
+    <section className="mt-8 border border-[var(--color-rule)] rounded-sm bg-[var(--color-paper-soft)] px-5 py-6 md:px-6">
       <div className="eyebrow">daemon paused</div>
       <div className="mt-4 text-[28px] font-bold leading-[1.12] tracking-tight text-[var(--color-ink)]">
         Sauron is paused.
@@ -1607,7 +1383,564 @@ function PausedPanel() {
   );
 }
 
+function EarlierByThread({
+  hints, log, now, copied, onCopy, onToggle, expanded,
+}: {
+  hints: HintEntry[];
+  log: LogItem[];
+  now: number;
+  copied: string | null;
+  onCopy: (id: string) => void;
+  onToggle: (id: string) => void;
+  expanded: Set<string>;
+}) {
+  const [openHint, setOpenHint] = useState<string | null>(null);
+
+  // Only show labelled hints older enough to have events
+  const labelled = hints.filter((h) => h.label !== "");
+  if (labelled.length === 0 && log.length === 0) {
+    return <div className="text-[13px] text-[var(--color-ink-soft)]">no earlier activity yet.</div>;
+  }
+
+  // Assign log events to hints by time window
+  const usedIds = new Set<string>();
+  const hintEvents: Map<string, LogItem[]> = new Map();
+
+  for (const h of labelled) {
+    const events = log.filter(
+      (e) => e.timestamp >= h.started_at - 30 && e.timestamp <= h.last_active_at + 30
+    );
+    hintEvents.set(h.id, events);
+    events.forEach((e) => usedIds.add(e.id));
+  }
+
+  // Unassigned events
+  const orphans = log.filter((e) => !usedIds.has(e.id));
+
+  return (
+    <div className="divide-y divide-[var(--color-rule)] border border-[var(--color-rule)] rounded-sm">
+      {labelled.map((h) => {
+        const events = hintEvents.get(h.id) ?? [];
+        const isOpen = openHint === h.id;
+        const ageSec = now - h.last_active_at;
+        const age = ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago`
+          : ageSec < 86400 ? `${Math.floor(ageSec / 3600)}h ago`
+          : `${Math.floor(ageSec / 86400)}d ago`;
+        const durationSec = Math.max(0, h.last_active_at - h.started_at);
+        const dur = durationSec < 60 ? `${durationSec}s`
+          : durationSec < 3600 ? `${Math.round(durationSec / 60)}m`
+          : `${Math.floor(durationSec / 3600)}h ${Math.round((durationSec % 3600) / 60)}m`;
+
+        return (
+          <div key={h.id}>
+            <button
+              onClick={() => setOpenHint(isOpen ? null : h.id)}
+              className="w-full flex items-baseline justify-between gap-4 px-4 py-3 text-left hover:bg-white/5 transition-colors cursor-pointer"
+            >
+              <div className="flex items-baseline gap-2.5 min-w-0">
+                <span className="truncate text-[14px] font-medium text-[var(--color-ink)]">
+                  {h.label}
+                </span>
+                <span className="shrink-0 text-[11px] text-[var(--color-ink-faint)]">
+                  {h.dominant_app}
+                </span>
+              </div>
+              <div className="flex items-baseline gap-3 shrink-0 text-[12px] tnum text-[var(--color-ink-faint)]">
+                <span>{dur} · {age}</span>
+                <span className="text-[11px]">{events.length} events</span>
+                <span>{isOpen ? "−" : "+"}</span>
+              </div>
+            </button>
+
+            {isOpen && (
+              <div className="border-t border-[var(--color-rule)] bg-[var(--color-paper)]">
+                {events.length === 0 ? (
+                  <div className="px-4 py-3 text-[12px] text-[var(--color-ink-faint)]">
+                    no captured events in this window.
+                  </div>
+                ) : (
+                  <ul>
+                    {[...events].sort((a, b) => a.timestamp - b.timestamp).map((it) => (
+                      <li key={it.id} className="px-4">
+                        <LogLine
+                          item={it}
+                          isOpen={expanded.has(it.id)}
+                          onToggle={() => onToggle(it.id)}
+                          onPermalink={() => onCopy(it.id)}
+                          copied={copied === it.id}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {orphans.length > 0 && (
+        <div>
+          <button
+            onClick={() => setOpenHint(openHint === "__orphans__" ? null : "__orphans__")}
+            className="w-full flex items-baseline justify-between gap-4 px-4 py-3 text-left hover:bg-white/5 transition-colors cursor-pointer"
+          >
+            <span className="text-[13px] text-[var(--color-ink-soft)]">other activity</span>
+            <div className="flex items-baseline gap-3 shrink-0 text-[12px] tnum text-[var(--color-ink-faint)]">
+              <span>{orphans.length} events</span>
+              <span>{openHint === "__orphans__" ? "−" : "+"}</span>
+            </div>
+          </button>
+          {openHint === "__orphans__" && (
+            <div className="border-t border-[var(--color-rule)] bg-[var(--color-paper)]">
+              <ul>
+                {[...orphans].sort((a, b) => a.timestamp - b.timestamp).map((it) => (
+                  <li key={it.id} className="px-4">
+                    <LogLine
+                      item={it}
+                      isOpen={expanded.has(it.id)}
+                      onToggle={() => onToggle(it.id)}
+                      onPermalink={() => onCopy(it.id)}
+                      copied={copied === it.id}
+                    />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const HINT_WEIGHT_THRESHOLD = 0.35;
+
+function HintHistory({ hints, primaryId, now }: { hints: HintEntry[]; primaryId?: string; now: number }) {
+  const [openId, setOpenId] = useState<string | null>(null);
+
+  const labelled = hints.filter((h) => h.label !== "" && h.id !== primaryId);
+  const active = labelled.filter((h) => h.weight >= HINT_WEIGHT_THRESHOLD);
+  const previous = labelled.filter((h) => h.weight < HINT_WEIGHT_THRESHOLD);
+
+  if (labelled.length === 0) return null;
+
+  const renderRow = (h: HintEntry) => {
+    const durationSec = Math.max(0, h.last_active_at - h.started_at);
+    const dur = durationSec < 60 ? `${durationSec}s`
+      : durationSec < 3600 ? `${Math.round(durationSec / 60)}m`
+      : `${Math.floor(durationSec / 3600)}h ${Math.round((durationSec % 3600) / 60)}m`;
+    const ageSec = now - h.last_active_at;
+    const age = ageSec < 60 ? "just now"
+      : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago`
+      : ageSec < 86400 ? `${Math.floor(ageSec / 3600)}h ago`
+      : `${Math.floor(ageSec / 86400)}d ago`;
+    const isPrev = h.weight < HINT_WEIGHT_THRESHOLD;
+    const isOpen = openId === h.id;
+
+    // Deduplicate evidence: group by source_table+summary, keep most recent
+    const seen = new Set<string>();
+    const deduped = h.evidence.filter((e) => {
+      const key = `${e.app_name}:${e.summary.slice(0, 60)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    // Summarise unique apps and source types for the detail header
+    const appCounts: Record<string, number> = {};
+    for (const e of h.evidence) {
+      if (e.app_name) appCounts[e.app_name] = (appCounts[e.app_name] || 0) + 1;
+    }
+    const topApps = Object.entries(appCounts).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([a]) => a);
+
+    return (
+      <div key={h.id} className={isPrev ? "opacity-50" : ""}>
+        {/* Row header — clickable */}
+        <button
+          onClick={() => setOpenId(isOpen ? null : h.id)}
+          className="w-full grid grid-cols-[1fr_auto] items-baseline gap-4 px-4 py-2.5 text-left hover:bg-white/5 transition-colors cursor-pointer"
+        >
+          <div className="flex items-baseline gap-2.5 min-w-0">
+            {!isPrev && <span className="shrink-0 h-1.5 w-1.5 rounded-full bg-[var(--color-accent)] relative top-[1px]" />}
+            <span className={`truncate text-[13.5px] ${isPrev ? "text-[var(--color-ink-soft)]" : "font-medium text-[var(--color-ink)]"}`}>
+              {h.label}
+            </span>
+            <span className="shrink-0 text-[11px] text-[var(--color-ink-faint)]">{h.dominant_app}</span>
+          </div>
+          <div className="flex items-baseline gap-3 shrink-0">
+            <span className="text-[12px] tnum text-[var(--color-ink-faint)]">{dur} · {age}</span>
+            <span className="text-[11px] text-[var(--color-ink-faint)]">{isOpen ? "−" : "+"}</span>
+          </div>
+        </button>
+
+        {/* Expanded detail */}
+        {isOpen && (
+          <div className="border-t border-[var(--color-rule)] bg-[var(--color-paper)] px-4 py-4">
+            {/* Stats row */}
+            <div className="flex flex-wrap gap-x-5 gap-y-1 text-[12px] tnum text-[var(--color-ink-soft)] mb-4">
+              <span><span className="text-[var(--color-ink-faint)]">confidence</span> {Math.round(h.confidence * 100)}%</span>
+              <span><span className="text-[var(--color-ink-faint)]">evidence</span> {h.evidence_count} signals</span>
+              <span><span className="text-[var(--color-ink-faint)]">apps</span> {topApps.join(", ")}</span>
+              <span><span className="text-[var(--color-ink-faint)]">weight</span> {Math.round(h.weight * 100)}%</span>
+            </div>
+
+            {/* Evidence timeline */}
+            {deduped.length > 0 ? (
+              <ul className="space-y-1.5">
+                {deduped.slice(0, 12).map((e) => (
+                  <li key={e.id} className="grid grid-cols-[56px_1fr] gap-3 text-[12px]">
+                    <span className="font-mono tnum text-[var(--color-ink-faint)]">
+                      {new Date(e.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}
+                    </span>
+                    <span className={e.severity === "warn" ? "text-[var(--color-signal)]" : "text-[var(--color-ink-soft)]"}>
+                      {e.summary}
+                    </span>
+                  </li>
+                ))}
+                {deduped.length > 12 && (
+                  <li className="text-[11px] text-[var(--color-ink-faint)] pl-[68px]">
+                    +{deduped.length - 12} more signals
+                  </li>
+                )}
+              </ul>
+            ) : (
+              <div className="text-[12px] text-[var(--color-ink-faint)]">no evidence captured</div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <section className="mt-6">
+      {active.length > 0 && (
+        <>
+          <div className="eyebrow mb-2">also active</div>
+          <div className="divide-y divide-[var(--color-rule)] border border-[var(--color-rule)] rounded-sm">
+            {active.map(renderRow)}
+          </div>
+        </>
+      )}
+      {previous.length > 0 && (
+        <div className={active.length > 0 ? "mt-6" : ""}>
+          <div className="eyebrow mb-2">earlier today</div>
+          <div className="divide-y divide-[var(--color-rule)] border border-[var(--color-rule)] rounded-sm">
+            {previous.map(renderRow)}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ContextPanel({
+  reentry, context, edits, hints, recentHints, now,
+}: {
+  reentry: Snapshot["reentry"];
+  context: Snapshot["context"];
+  edits: Snapshot["edits"];
+  hints: HintEntry[];
+  recentHints: HintEntry[];
+  now: number;
+}) {
+  const primaryHint = hints.find((h) => h.weight >= HINT_WEIGHT_THRESHOLD && h.label !== "");
+  const CONFIDENCE_THRESHOLD = 0.75;
+  const hasReentryTask = !!(reentry?.task && reentry.task.confidence >= CONFIDENCE_THRESHOLD);
+  const [openHint, setOpenHint] = useState<string | null>(null);
+
+  const title = primaryHint
+    ? primaryHint.label
+    : hasReentryTask
+      ? readableTaskTitle(reentry?.task?.goal ?? "", reentry?.project?.name)
+      : null;
+
+  const startedAt = primaryHint?.started_at ?? reentry?.task?.started_at ?? reentry?.task?.updated_at ?? 0;
+  const generatedAt = reentry?.generated_at ?? Math.floor(Date.now() / 1000);
+  const activeFor = startedAt && generatedAt > startedAt ? fmtDur(startedAt, generatedAt) : null;
+
+  const decision = !primaryHint && hasReentryTask
+    ? readableNextAction(reentry?.next_action || reentry?.task?.next_action || "")
+    : null;
+
+  // All other labelled hints
+  const labelled = recentHints.filter((h) => h.label !== "" && h.id !== primaryHint?.id);
+  const alsoActive = labelled.filter((h) => h.weight >= HINT_WEIGHT_THRESHOLD);
+  const earlier = labelled.filter((h) => h.weight < HINT_WEIGHT_THRESHOLD);
+
+  const renderHintRow = (h: HintEntry) => {
+    const isOpen = openHint === h.id;
+    const ageSec = now - h.last_active_at;
+    const age = ageSec < 60 ? "just now"
+      : ageSec < 3600 ? `${Math.floor(ageSec / 60)}m ago`
+      : `${Math.floor(ageSec / 3600)}h ago`;
+    const dur = (() => {
+      const s = Math.max(0, h.last_active_at - h.started_at);
+      return s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+    })();
+    const isPrev = h.weight < HINT_WEIGHT_THRESHOLD;
+
+    return (
+      <div key={h.id} className={isPrev ? "opacity-55" : ""}>
+        <button
+          onClick={() => setOpenHint(isOpen ? null : h.id)}
+          className="w-full flex items-baseline justify-between gap-4 px-6 py-2.5 text-left hover:bg-white/5 transition-colors cursor-pointer"
+        >
+          <div className="flex items-baseline gap-2.5 min-w-0">
+            {!isPrev && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-accent)] relative top-[1px]" />}
+            <span className={`truncate text-[14px] ${isPrev ? "text-[var(--color-ink-soft)]" : "font-medium text-[var(--color-ink)]"}`}>{h.label}</span>
+            <span className="shrink-0 text-[11px] text-[var(--color-ink-faint)]">{h.dominant_app}</span>
+          </div>
+          <div className="flex items-baseline gap-3 shrink-0 text-[12px] tnum text-[var(--color-ink-faint)]">
+            <span>{dur} · {age}</span>
+            <span>{isOpen ? "−" : "+"}</span>
+          </div>
+        </button>
+        {isOpen && (
+          <div className="mx-6 mb-2 border border-[var(--color-rule)] rounded-sm bg-[var(--color-paper)] px-4 py-3">
+            <div className="flex flex-wrap gap-x-5 text-[12px] tnum text-[var(--color-ink-soft)] mb-3">
+              <span><span className="text-[var(--color-ink-faint)]">confidence </span>{Math.round(h.confidence * 100)}%</span>
+              <span><span className="text-[var(--color-ink-faint)]">signals </span>{h.evidence_count}</span>
+            </div>
+            <ul className="space-y-1.5">
+              {h.evidence.slice(0, 8).map((e) => (
+                <li key={e.id} className="grid grid-cols-[44px_1fr] gap-3 text-[12px]">
+                  <span className="font-mono tnum text-[var(--color-ink-faint)]">
+                    {new Date(e.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })}
+                  </span>
+                  <span className="text-[var(--color-ink-soft)]">{e.summary}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="border border-[var(--color-rule)] rounded-sm bg-[var(--color-paper-soft)]">
+      {/* Primary thread */}
+      <div className="px-6 py-6">
+        <div className="eyebrow">current thread</div>
+        {title ? (
+          <>
+            <div className="mt-3 text-[32px] font-bold leading-[1.08] tracking-tight text-[var(--color-ink)]">{title}</div>
+            <div className="mt-2 flex items-baseline gap-4 text-[13px] tnum text-[var(--color-ink-soft)]">
+              {activeFor && <span>active for {activeFor}</span>}
+              {decision && <span className="font-medium text-[var(--color-ink)]">{decision}</span>}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mt-3 text-[22px] font-medium text-[var(--color-ink-soft)]">No active thread.</div>
+            <p className="mt-2 text-[13px] text-[var(--color-ink-soft)]">Keep working — Sauron will label your current task automatically.</p>
+          </>
+        )}
+      </div>
+
+      {/* Other threads */}
+      {(alsoActive.length > 0 || earlier.length > 0) && (
+        <div className="border-t border-[var(--color-rule)] divide-y divide-[var(--color-rule)]">
+          {alsoActive.length > 0 && (
+            <>
+              <div className="px-6 py-2">
+                <span className="eyebrow">also active</span>
+              </div>
+              {alsoActive.map(renderHintRow)}
+            </>
+          )}
+          {earlier.length > 0 && (
+            <>
+              <div className="px-6 py-2">
+                <span className="eyebrow">earlier today</span>
+              </div>
+              {earlier.map(renderHintRow)}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActivitySection({
+  rateBuckets, direction, eventsLast30, switches, flow, liveEvents, expanded, copied, onToggle, onPermalink,
+}: {
+  rateBuckets: number[];
+  direction: { icon: string; label: string };
+  eventsLast30: number;
+  switches: number;
+  flow: string[];
+  liveEvents: LogItem[];
+  expanded: Set<string>;
+  copied: string | null;
+  onToggle: (id: string) => void;
+  onPermalink: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const reversedFlow = [...flow].reverse();
+
+  return (
+    <details className="mt-3 border border-[var(--color-rule)] rounded-sm bg-[var(--color-paper-soft)]" open={open} onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary className="cursor-pointer list-none px-5 py-3 hover:bg-white/5 transition-colors">
+        <div className="flex items-baseline justify-between">
+          <div className="eyebrow">activity now</div>
+          <div className="text-[12px] tnum text-[var(--color-ink-soft)]">
+            {direction.icon} {direction.label} · {eventsLast30} events · {switches} switches
+          </div>
+        </div>
+      </summary>
+
+      <div className="px-5 pb-5 border-t border-[var(--color-rule)] pt-4">
+        {/* Sparkline full width */}
+        <div className="text-[var(--color-accent)]">
+          <Sparkline values={rateBuckets} width={700} height={32} />
+        </div>
+        <div className="mt-1.5 flex items-baseline gap-6 text-[12px] tnum text-[var(--color-ink-soft)]">
+          <span><span className="text-[var(--color-ink)] font-medium">{eventsLast30}</span> events in 30m</span>
+          <span><span className="text-[var(--color-ink)] font-medium">{switches}</span> app switches today</span>
+          {reversedFlow.length > 0 && (
+            <span className="flex items-center gap-1.5">
+              {reversedFlow.map((a, i) => (
+                <span key={a} className="flex items-center gap-1.5">
+                  {i > 0 && <span className="text-[var(--color-ink-faint)]">→</span>}
+                  <span className={i === reversedFlow.length - 1 ? "font-medium text-[var(--color-ink)]" : "text-[var(--color-ink-soft)]"}>
+                    {a}
+                  </span>
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
+
+        {/* Recent events */}
+        {liveEvents.length > 0 && (
+          <div className="mt-4 border-t border-[var(--color-rule)] pt-3">
+            <ul>
+              {liveEvents.slice(0, 5).map((it) => (
+                <li key={it.id}>
+                  <LogLine item={it} isOpen={expanded.has(it.id)}
+                    onToggle={() => onToggle(it.id)}
+                    onPermalink={() => onPermalink(it.id)}
+                    copied={copied === it.id} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function Last24hSection({ apps, totalHours }: { apps: [string, number][]; totalHours: number }) {
+  return (
+    <details className="mt-3 border border-[var(--color-rule)] rounded-sm bg-[var(--color-paper-soft)]">
+      <summary className="cursor-pointer list-none px-5 py-3 hover:bg-white/5 transition-colors">
+        <div className="flex items-baseline justify-between">
+          <div className="eyebrow">last 24h</div>
+          <div className="text-[12px] tnum text-[var(--color-ink-soft)]">{fmtHrs(totalHours)} tracked</div>
+        </div>
+      </summary>
+      <div className="px-5 pb-5 border-t border-[var(--color-rule)] pt-4">
+        <ActivityDonut apps={apps} totalHours={totalHours} />
+      </div>
+    </details>
+  );
+}
+
+type FlowStats = {
+  flows: number; almosts: number; flowTime: number; interruptions: number;
+  notifyInterruptions: number; exo: number; endo: number; totalLapses: number;
+  reEntryMedian: number; reEntryMax: number; reEntryCount: number;
+};
+
+function InterruptsSection({ flowStats, flowWindows }: {
+  flowStats: FlowStats;
+  flowWindows: FlowWindow[];
+}) {
+  return (
+    <details className="mt-3 border border-[var(--color-rule)] rounded-sm bg-[var(--color-paper-soft)]">
+      <summary className="cursor-pointer list-none px-5 py-3 hover:bg-white/5 transition-colors">
+        <div className="flex items-baseline justify-between">
+          <div className="eyebrow">interrupts</div>
+          <div className="text-[12px] tnum text-[var(--color-ink-soft)]">
+            {flowStats.flows} flow · {fmtDur(0, flowStats.flowTime)} · {flowStats.interruptions} interrupted
+            {flowStats.reEntryCount > 0 && ` · re-entry ~${fmtDur(0, Math.round(flowStats.reEntryMedian))}`}
+          </div>
+        </div>
+      </summary>
+
+      <div className="px-5 pb-5 border-t border-[var(--color-rule)] pt-4">
+        {/* Summary row */}
+        <div className="flex flex-wrap gap-x-8 gap-y-2 text-[13px] tnum mb-5">
+          <div>
+            <span className="text-[var(--color-ink-faint)]">exo </span>
+            <span className="font-semibold text-[var(--color-signal)]">{flowStats.exo}</span>
+            <span className="text-[var(--color-ink-faint)] mx-2">/</span>
+            <span className="text-[var(--color-ink-faint)]">endo </span>
+            <span className="font-semibold text-[var(--color-accent)]">{flowStats.endo}</span>
+          </div>
+          {flowStats.notifyInterruptions > 0 && (
+            <div><span className="text-[var(--color-ink-faint)]">from notify apps </span>
+              <span className="font-semibold text-[var(--color-signal)]">{flowStats.notifyInterruptions}</span>
+            </div>
+          )}
+          {flowStats.reEntryMax > 0 && (
+            <div><span className="text-[var(--color-ink-faint)]">longest re-entry </span>
+              <span className="font-semibold text-[var(--color-ink)]">{fmtDur(0, Math.round(flowStats.reEntryMax))}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Flow window table */}
+        {flowWindows.filter(w => w.isFlow || w.isAlmost).length === 0 ? (
+          <div className="text-[13px] text-[var(--color-ink-soft)]">no flow windows detected yet — need ≥10m of focused activity.</div>
+        ) : (
+          <table className="w-full text-[12.5px] tnum">
+            <thead>
+              <tr className="text-[11px] uppercase tracking-[0.1em] text-[var(--color-ink-faint)] border-b border-[var(--color-rule)]">
+                <th className="text-left pb-2 font-normal">time</th>
+                <th className="text-left pb-2 font-normal">duration</th>
+                <th className="text-left pb-2 font-normal">app</th>
+                <th className="text-left pb-2 font-normal">ended by</th>
+                <th className="text-left pb-2 font-normal">type</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[var(--color-rule)]">
+              {flowWindows.filter(w => w.isFlow || w.isAlmost).map((w) => {
+                const trigger = w.endedBy?.app ?? "—";
+                const isNotify = w.endedBy?.isNotify ?? false;
+                const badge = w.isFlow ? "flow" : "almost";
+                const type = w.interruptType ?? "—";
+                return (
+                  <tr key={w.id} className={w.isAlmost ? "opacity-60" : ""}>
+                    <td className="py-2 pr-4 text-[var(--color-ink-soft)]">
+                      {fmtClock(w.startTs)}–{fmtClock(w.endTs)}
+                    </td>
+                    <td className="py-2 pr-4 font-medium text-[var(--color-ink)]">
+                      {fmtDur(0, w.durationSec)}
+                      <span className="ml-1.5 text-[10px] text-[var(--color-accent)]">{badge}</span>
+                    </td>
+                    <td className="py-2 pr-4 text-[var(--color-ink)]">{w.app}</td>
+                    <td className={`py-2 pr-4 ${isNotify ? "text-[var(--color-signal)]" : "text-[var(--color-ink-soft)]"}`}>
+                      {trigger}{isNotify && " ⚡"}
+                    </td>
+                    <td className={`py-2 ${type === "exo" ? "text-[var(--color-signal)]" : type === "endo" ? "text-[var(--color-accent)]" : "text-[var(--color-ink-faint)]"}`}>
+                      {type}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </details>
+  );
+}
 
 function ReentryPanel({
   reentry,
@@ -1618,7 +1951,7 @@ function ReentryPanel({
   reentry: Snapshot["reentry"];
   context: Snapshot["context"];
   edits: Snapshot["edits"];
-  hints: Snapshot["hints"];
+  hints: HintEntry[];
 }) {
   const primaryHint = hints.find((h) => h.weight >= HINT_WEIGHT_THRESHOLD && h.label !== "");
   const secondaryHint = hints.find((h) => h !== primaryHint && h.weight >= HINT_WEIGHT_THRESHOLD && h.label !== "");
@@ -1628,7 +1961,7 @@ function ReentryPanel({
 
   if (!primaryHint && !hasReentryTask) {
     return (
-      <section className="border border-[var(--color-rule)] bg-[var(--color-paper-soft)] px-5 py-5">
+      <section className="border border-[var(--color-rule)] rounded-sm bg-[var(--color-paper-soft)] px-5 py-5">
         <div className="eyebrow">current thread</div>
         <div className="mt-4 text-[28px] font-bold leading-[1.12] tracking-tight text-[var(--color-ink)]">
           No active thread.
@@ -1657,76 +1990,24 @@ function ReentryPanel({
     ? fmtDur(startedAt, generatedAt)
     : "just started";
 
-  const decision = primaryHint
-    ? `Return to ${primaryHint.dominant_app}.`
-    : readableNextAction(reentry?.next_action || reentry?.task?.next_action || "");
-
-  // Evidence: prefer hint evidence rows, fall back to reentry events.
-  let evidenceLine = "";
-  if (primaryHint && primaryHint.evidence.length > 0) {
-    const appCounts: Record<string, number> = {};
-    for (const e of primaryHint.evidence) {
-      if (e.app_name) appCounts[e.app_name] = (appCounts[e.app_name] || 0) + 1;
-    }
-    const parts = Object.entries(appCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 3)
-      .map(([app]) => app);
-    evidenceLine = parts.join(" · ");
-  } else if (reentry) {
-    evidenceLine = formatEvidenceSummary(reentry, context, edits);
-  }
-
-  const rawLastUseful = reentry?.task?.last_useful_state || "";
-  const isNoisyState = !rawLastUseful
-    || /^Last useful context:\s*([\w\s]+)$/.test(rawLastUseful)
-    || rawLastUseful.length < 30;
-  const lastUseful = isNoisyState ? null : cleanContextText(rawLastUseful);
-
-  const hintConfidence = primaryHint ? Math.round(primaryHint.confidence * 100) : null;
+  // Only show a decision if it comes from a real reentry task (not a hint app-name restatement).
+  const decision = !primaryHint
+    ? readableNextAction(reentry?.next_action || reentry?.task?.next_action || "")
+    : null;
 
   return (
-    <section className="border border-[var(--color-rule)] bg-[var(--color-paper-soft)] px-5 py-5 md:px-6 md:py-6">
-      <div>
-        <div className="eyebrow">current thread</div>
-        <div className="mt-3 text-[30px] font-bold leading-[1.08] tracking-tight text-[var(--color-ink)]">
-          {title}
-        </div>
-        <div className="mt-1 flex items-center gap-3 text-[12px] tnum text-[var(--color-ink-soft)]">
-          <span>active for {activeFor}</span>
-          {hintConfidence !== null && (
-            <span className="text-[var(--color-ink-faint)]">{hintConfidence}% confidence</span>
-          )}
-        </div>
+    <section className="border border-[var(--color-rule)] rounded-sm bg-[var(--color-paper-soft)] px-5 py-5 md:px-6 md:py-6">
+      <div className="eyebrow">current thread</div>
+      <div className="mt-3 text-[30px] font-bold leading-[1.08] tracking-tight text-[var(--color-ink)]">
+        {title}
       </div>
-
-      {evidenceLine && (
-        <div className="mt-5 border-y border-[var(--color-rule)] py-3">
-          <p className="text-[13px] text-[var(--color-ink-soft)]">{evidenceLine}</p>
-        </div>
-      )}
-
-      <div className="mt-5">
-        <p className="text-[18px] font-bold leading-[1.38] text-[var(--color-ink)]">
+      <div className="mt-2 text-[13px] tnum text-[var(--color-ink-soft)]">
+        active for {activeFor}
+      </div>
+      {decision && (
+        <p className="mt-5 text-[16px] font-semibold leading-[1.42] text-[var(--color-ink)]">
           {decision}
         </p>
-        {lastUseful && (
-          <p className="mt-3 text-[14px] font-medium leading-[1.55] text-[var(--color-ink-soft)]">
-            {lastUseful}
-          </p>
-        )}
-      </div>
-
-      {secondaryHint && (
-        <div className="mt-5 border-t border-[var(--color-rule)] pt-4">
-          <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-faint)]">also active</div>
-          <div className="mt-1.5 text-[14px] text-[var(--color-ink-soft)]">
-            {secondaryHint.label}
-            <span className="ml-2 text-[12px] text-[var(--color-ink-faint)]">
-              weight {Math.round(secondaryHint.weight * 100)}%
-            </span>
-          </div>
-        </div>
       )}
     </section>
   );
@@ -1746,7 +2027,7 @@ function NowPanel({
   flow: string[];
 }) {
   return (
-    <section className="border border-[var(--color-rule)] px-5 py-5">
+    <section className="border border-[var(--color-rule)] rounded-sm px-5 py-5">
       <div className="eyebrow">activity now</div>
       {context ? (
         <>
@@ -1831,6 +2112,97 @@ function readableNextAction(action: string): string {
   return s;
 }
 
+// Palette for top apps — cycles if more than 8
+const DONUT_COLORS = [
+  "var(--color-accent)",
+  "#60a5fa", "#f472b6", "#fb923c", "#a78bfa", "#34d399", "#facc15", "#f87171",
+];
+
+function ActivityDonut({ apps, totalHours, compact = false }: { apps: [string, number][]; totalHours: number; compact?: boolean }) {
+  const R = compact ? 44 : 72;
+  const stroke = compact ? 9 : 14;
+  const size = (R + stroke) * 2 + 4;
+  const cx = size / 2;
+  const cy = size / 2;
+  const circumference = 2 * Math.PI * R;
+
+  const maxApps = compact ? 5 : 7;
+  const top = apps.slice(0, maxApps);
+  const otherHours = apps.slice(maxApps).reduce((s, [, h]) => s + h, 0);
+  const segments: { label: string; hours: number; color: string }[] = [
+    ...top.map(([name, h], i) => ({ label: name, hours: h, color: DONUT_COLORS[i] })),
+    ...(otherHours > 0 ? [{ label: "other", hours: otherHours, color: "var(--color-ink-faint)" }] : []),
+  ];
+  const untracked = Math.max(0, 24 - totalHours);
+
+  let offset = 0;
+  const arcs = segments.map((seg) => {
+    const len = (seg.hours / 24) * circumference;
+    const arc = { ...seg, dasharray: `${len} ${circumference}`, dashoffset: -offset };
+    offset += len;
+    return arc;
+  });
+  const untrackedLen = (untracked / 24) * circumference;
+
+  const donut = (
+    <svg width={size} height={size} className="shrink-0" aria-hidden>
+      <circle cx={cx} cy={cy} r={R} fill="none" stroke="var(--color-rule)" strokeWidth={stroke}
+        strokeDasharray={`${untrackedLen > 0 ? circumference : 0} ${circumference}`}
+        strokeDashoffset={-offset}
+        style={{ transform: "rotate(-90deg)", transformOrigin: `${cx}px ${cy}px` }} />
+      {arcs.map((arc) => (
+        <circle key={arc.label} cx={cx} cy={cy} r={R} fill="none"
+          stroke={arc.color} strokeWidth={stroke} strokeLinecap="butt"
+          strokeDasharray={arc.dasharray} strokeDashoffset={arc.dashoffset}
+          style={{ transform: "rotate(-90deg)", transformOrigin: `${cx}px ${cy}px` }} />
+      ))}
+      <text x={cx} y={cy - (compact ? 4 : 6)} textAnchor="middle"
+        style={{ fontSize: compact ? 13 : 18, fontWeight: 700, fill: "var(--color-ink)" }}>
+        {fmtHrs(totalHours)}
+      </text>
+      <text x={cx} y={cy + (compact ? 9 : 12)} textAnchor="middle"
+        style={{ fontSize: compact ? 8 : 10, fill: "var(--color-ink-soft)", textTransform: "uppercase", letterSpacing: "0.1em" }}>
+        tracked
+      </text>
+    </svg>
+  );
+
+  const legend = (
+    <div className={compact ? "space-y-1.5 min-w-0" : "space-y-2 min-w-0"}>
+      {arcs.map((arc) => (
+        <div key={arc.label} className={`flex items-baseline gap-2 ${compact ? "text-[11.5px]" : "text-[13px]"}`}>
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full relative top-[1px]" style={{ backgroundColor: arc.color }} />
+          <span className="truncate text-[var(--color-ink)]">{arc.label}</span>
+          <span className="ml-auto pl-3 tnum text-[var(--color-ink-soft)] shrink-0">{fmtHrs(arc.hours)}</span>
+        </div>
+      ))}
+      {untracked > 0.1 && (
+        <div className={`flex items-baseline gap-2 ${compact ? "text-[11.5px]" : "text-[13px]"} opacity-40`}>
+          <span className="h-1.5 w-1.5 shrink-0 rounded-full relative top-[1px] bg-[var(--color-rule)]" />
+          <span className="text-[var(--color-ink-soft)]">untracked</span>
+          <span className="ml-auto pl-3 tnum text-[var(--color-ink-soft)] shrink-0">{fmtHrs(untracked)}</span>
+        </div>
+      )}
+    </div>
+  );
+
+  if (compact) {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center justify-center">{donut}</div>
+        {legend}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-8">
+      {donut}
+      {legend}
+    </div>
+  );
+}
+
 function Sparkline({
   values,
   width = 150,
@@ -1896,13 +2268,15 @@ function FeaturedEvent({ item, isOpen, onToggle, onPermalink, copied }: EventPro
         : "text-[var(--color-ink)]";
 
   const categoryLabel =
-    item.category === "clipboard" && item.app
-      ? `copied from ${item.app}`
-      : item.category === "edit"
-        ? "edit"
-        : item.category === "trace"
-          ? item.kind.replace(/_/g, " ")
-          : item.category;
+    item.category === "voice"
+      ? "voice · Wispr Flow"
+      : item.category === "clipboard" && item.app
+        ? `copied from ${item.app}`
+        : item.category === "edit"
+          ? "edit"
+          : item.category === "trace"
+            ? item.kind.replace(/_/g, " ")
+            : item.category;
 
   return (
     <div id={item.id} className="group">
@@ -1921,10 +2295,24 @@ function FeaturedEvent({ item, isOpen, onToggle, onPermalink, copied }: EventPro
         </button>
       </div>
 
-      {item.category === "clipboard" && item.full ? (
+      {item.category === "voice" && item.full ? (
+        <div className="mt-2">
+          <p
+            className="cursor-pointer border-l-2 border-[var(--color-accent)]/40 hover:border-[var(--color-accent)] pl-3.5 text-[14px] leading-[1.6] text-[var(--color-ink)] transition-colors"
+            onClick={hasBody ? onToggle : undefined}
+          >
+            {isOpen ? item.full : <span className="line-clamp-3 block">{item.full}</span>}
+          </p>
+          {hasBody && item.full && item.full.length > 200 && (
+            <button onClick={onToggle} className="mt-1.5 text-[12px] text-[var(--color-ink-soft)] hover:text-[var(--color-accent)]">
+              {isOpen ? "collapse" : `show all · ${item.full.length} chars`}
+            </button>
+          )}
+        </div>
+      ) : item.category === "clipboard" && item.full ? (
         <div className="mt-2">
           <blockquote
-            className="cursor-pointer border-l-2 border-[var(--color-rule)] pl-3.5 font-mono text-[13px] leading-[1.6] text-[var(--color-ink)]"
+            className="cursor-pointer border-l-2 border-[var(--color-rule)] hover:border-[var(--color-accent)] pl-3.5 font-mono text-[13px] leading-[1.6] text-[var(--color-ink)] transition-colors"
             onClick={hasBody ? onToggle : undefined}
           >
             {isOpen ? (
@@ -1993,8 +2381,8 @@ function LogLine({ item, isOpen, onToggle, onPermalink, copied, forceExpandable 
   return (
     <div id={item.id} className="border-b border-[var(--color-rule)] last:border-0">
       <div
-        className={`grid grid-cols-[78px_20px_1fr_20px] items-baseline gap-3 py-2 ${
-          hasMore ? "cursor-pointer" : ""
+        className={`grid grid-cols-[78px_20px_1fr_20px] items-baseline gap-3 py-2 transition-colors ${
+          hasMore ? "cursor-pointer hover:bg-white/5" : ""
         }`}
         onClick={onToggle}
         title={item.text}

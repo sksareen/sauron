@@ -15,6 +15,20 @@ type HintSummary struct {
 	Evidence []store.HintEvidence `json:"evidence"`
 }
 
+// GetRecentHints returns all hints (any status) with evidence, for the history view.
+func GetRecentHints(db *store.DB, limit int) ([]HintSummary, error) {
+	hints, err := store.GetRecentHints(db, limit)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]HintSummary, 0, len(hints))
+	for _, h := range hints {
+		ev, _ := store.GetHintEvidence(db, h.ID, 20)
+		out = append(out, HintSummary{HintRecord: h, Evidence: ev})
+	}
+	return out, nil
+}
+
 // GetHints returns the top N active hints with their recent evidence.
 func GetHints(db *store.DB, limit int) ([]HintSummary, error) {
 	hints, err := store.GetActiveHints(db, limit)

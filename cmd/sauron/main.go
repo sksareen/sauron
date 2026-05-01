@@ -705,18 +705,23 @@ func main() {
 
 	// ── hints ──────────────────────────────────────────────────────────────────
 
-	var hintsJSON bool
+	var hintsJSON, hintsAll bool
 	var hintsLimit int
 	hintsCmd := &cobra.Command{
 		Use:   "hints",
-		Short: "Show active Human Intention Vectors",
+		Short: "Show Human Intention Vectors (active by default, --all for history)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			db, err := store.OpenReadOnly()
 			if err != nil {
 				return err
 			}
 			defer db.Close()
-			hints, err := query.GetHints(db, hintsLimit)
+			var hints []query.HintSummary
+			if hintsAll {
+				hints, err = query.GetRecentHints(db, hintsLimit)
+			} else {
+				hints, err = query.GetHints(db, hintsLimit)
+			}
 			if err != nil {
 				return err
 			}
@@ -725,6 +730,7 @@ func main() {
 		},
 	}
 	hintsCmd.Flags().BoolVar(&hintsJSON, "json", false, "JSON output")
+	hintsCmd.Flags().BoolVar(&hintsAll, "all", false, "show all hints including paused/abandoned")
 	hintsCmd.Flags().IntVar(&hintsLimit, "limit", 5, "max hints to show")
 	root.AddCommand(hintsCmd)
 

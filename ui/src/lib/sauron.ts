@@ -217,6 +217,10 @@ export function getHints(limit = 5) {
   return runJSON<HintRecord[]>(`hints --limit ${limit}`);
 }
 
+export function getRecentHints(limit = 20) {
+  return runJSON<HintRecord[]>(`hints --limit ${limit} --all`);
+}
+
 export async function getExperienceStats(): Promise<ExperienceStats> {
   try {
     const out = await run("experience stats");

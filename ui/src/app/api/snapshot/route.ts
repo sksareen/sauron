@@ -5,6 +5,7 @@ import {
   getContext,
   getExperienceStats,
   getHints,
+  getRecentHints,
   getReentryContext,
   getStatus,
   getTimeline,
@@ -16,7 +17,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET() {
-  const [status, context, activity, timeline, clipboard, traces, experience, reentry, hints] =
+  const [status, context, activity, timeline, clipboard, traces, experience, reentry, hints, recentHints] =
     await Promise.allSettled([
       getStatus(),
       getContext(),
@@ -27,6 +28,7 @@ export async function GET() {
       getExperienceStats(),
       getReentryContext(),
       getHints(3),
+      getRecentHints(20),
     ]);
 
   const unwrap = <T,>(r: PromiseSettledResult<T>, fallback: T): T =>
@@ -51,6 +53,7 @@ export async function GET() {
     experience: unwrap(experience, { total: 0, success: 0, failure: 0, partial: 0 }),
     reentry: unwrap(reentry, null),
     hints: unwrap(hints, []),
+    recent_hints: unwrap(recentHints, []),
     edits,
   });
 }

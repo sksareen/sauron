@@ -80,7 +80,19 @@ LIMIT 5`, minNewEvidence, minAgeWithoutLabel)
 		return nil, fmt.Errorf("get hints needing label: %w", err)
 	}
 	defer rows.Close()
-	return scanHints(rows)
+
+	var out []HintRecord
+	for rows.Next() {
+		var h HintRecord
+		var newEvidence int // extra column not in HintRecord
+		if err := rows.Scan(&h.ID, &h.Label, &h.Confidence, &h.Weight, &h.Status,
+			&h.DominantApp, &h.WindowPattern, &h.MergeGroupID, &h.Embedding,
+			&h.StartedAt, &h.LastActiveAt, &h.LabelledAt, &h.EvidenceCount, &newEvidence); err != nil {
+			return nil, fmt.Errorf("scan hint row: %w", err)
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
 }
 
 // GetHintEvidence returns the most recent evidence rows for a hint.
@@ -106,6 +118,21 @@ LIMIT ?`, hintID, limit)
 		out = append(out, e)
 	}
 	return out, rows.Err()
+}
+
+// GetRecentHints returns all hints (any status) ordered by last_active_at desc.
+func GetRecentHints(db *DB, limit int) ([]HintRecord, error) {
+	rows, err := db.Query(`
+SELECT id, label, confidence, weight, status, dominant_app, window_pattern,
+       COALESCE(merge_group_id,''), embedding, started_at, last_active_at, labelled_at, evidence_count
+FROM hints
+ORDER BY last_active_at DESC
+LIMIT ?`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("get recent hints: %w", err)
+	}
+	defer rows.Close()
+	return scanHints(rows)
 }
 
 // GetAllActiveHintsForDecay returns all hints that need weight decay applied.
