@@ -61,10 +61,88 @@ CREATE TABLE IF NOT EXISTS intent_traces (
     raw_events             TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS live_vercel_logs (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    deployment_url TEXT NOT NULL,
+    level          TEXT,
+    method         TEXT,
+    path           TEXT,
+    status_code    INTEGER,
+    message        TEXT NOT NULL,
+    dedupe_hash    TEXT NOT NULL,
+    captured_at    INTEGER NOT NULL,
+    UNIQUE(dedupe_hash)
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_key   TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL,
+    kind          TEXT NOT NULL DEFAULT 'inferred',
+    root_hint     TEXT NOT NULL DEFAULT '',
+    created_at    INTEGER NOT NULL,
+    updated_at    INTEGER NOT NULL,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS open_tasks (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id           TEXT NOT NULL UNIQUE,
+    project_id        INTEGER,
+    status            TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active', 'paused', 'completed', 'abandoned')),
+    goal              TEXT NOT NULL DEFAULT '',
+    last_useful_state TEXT NOT NULL DEFAULT '',
+    next_action       TEXT NOT NULL DEFAULT '',
+    confidence        REAL NOT NULL DEFAULT 0,
+    started_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL,
+    completed_at      INTEGER,
+    completion_source TEXT NOT NULL DEFAULT '',
+    metadata_json     TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS human_traces (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    trace_id      TEXT NOT NULL UNIQUE,
+    trace_type    TEXT NOT NULL CHECK(trace_type IN ('debugging', 'interruption', 'reentry', 'completion')),
+    project_id    INTEGER,
+    task_id       TEXT NOT NULL DEFAULT '',
+    trigger_type  TEXT NOT NULL DEFAULT '',
+    status        TEXT NOT NULL DEFAULT 'unknown',
+    started_at    INTEGER NOT NULL,
+    completed_at  INTEGER NOT NULL,
+    summary       TEXT NOT NULL DEFAULT '',
+    next_action   TEXT NOT NULL DEFAULT '',
+    confidence    REAL NOT NULL DEFAULT 0,
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS human_trace_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    trace_id      TEXT NOT NULL,
+    ts            INTEGER NOT NULL,
+    event_type    TEXT NOT NULL,
+    source_table  TEXT NOT NULL DEFAULT '',
+    source_id     INTEGER,
+    summary       TEXT NOT NULL DEFAULT '',
+    app_name      TEXT NOT NULL DEFAULT '',
+    window_title  TEXT NOT NULL DEFAULT '',
+    artifact_uri  TEXT NOT NULL DEFAULT '',
+    severity      TEXT NOT NULL DEFAULT 'info',
+    metadata_json TEXT NOT NULL DEFAULT '{}'
+);
+
 CREATE INDEX IF NOT EXISTS idx_clipboard_captured_at ON clipboard_history(captured_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activity_started_at   ON activity_log(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_started_at   ON context_sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_traces_completed_at   ON intent_traces(completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_vercel_captured_at    ON live_vercel_logs(captured_at DESC);
+CREATE INDEX IF NOT EXISTS idx_projects_project_key  ON projects(project_key);
+CREATE INDEX IF NOT EXISTS idx_open_tasks_status     ON open_tasks(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_open_tasks_project    ON open_tasks(project_id, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_human_traces_type     ON human_traces(trace_type, completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_human_traces_task     ON human_traces(task_id, completed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_human_trace_events    ON human_trace_events(trace_id, ts ASC);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS clipboard_fts USING fts5(
     content,
@@ -111,6 +189,39 @@ AFTER UPDATE ON clipboard_history BEGIN
     INSERT INTO clipboard_fts(rowid, content, source_app, window_title)
     VALUES (new.id, new.content, new.source_app, new.window_title);
 END;
+
+CREATE TABLE IF NOT EXISTS hints (
+    id             TEXT PRIMARY KEY,
+    label          TEXT NOT NULL DEFAULT '',
+    confidence     REAL NOT NULL DEFAULT 0,
+    weight         REAL NOT NULL DEFAULT 1.0,
+    status         TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','completed','abandoned')),
+    dominant_app   TEXT NOT NULL DEFAULT '',
+    window_pattern TEXT NOT NULL DEFAULT '',
+    merge_group_id TEXT,
+    embedding      BLOB,
+    started_at     INTEGER NOT NULL,
+    last_active_at INTEGER NOT NULL,
+    labelled_at    INTEGER NOT NULL DEFAULT 0,
+    evidence_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS hint_evidence (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    hint_id      TEXT NOT NULL REFERENCES hints(id),
+    source_table TEXT NOT NULL,
+    source_id    INTEGER NOT NULL,
+    ts           INTEGER NOT NULL,
+    summary      TEXT NOT NULL DEFAULT '',
+    app_name     TEXT NOT NULL DEFAULT '',
+    window_title TEXT NOT NULL DEFAULT '',
+    severity     TEXT NOT NULL DEFAULT 'info'
+);
+
+CREATE INDEX IF NOT EXISTS idx_hints_status        ON hints(status, weight DESC);
+CREATE INDEX IF NOT EXISTS idx_hints_last_active   ON hints(last_active_at DESC);
+CREATE INDEX IF NOT EXISTS idx_hint_evidence_hint  ON hint_evidence(hint_id, ts DESC);
+CREATE INDEX IF NOT EXISTS idx_hint_evidence_ts    ON hint_evidence(ts DESC);
 `
 
 // DB wraps the underlying *sql.DB.

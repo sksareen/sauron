@@ -13,12 +13,13 @@ import (
 	"time"
 
 	"github.com/sksareen/sauron/internal/embed"
+	"github.com/sksareen/sauron/internal/reentry"
 	"github.com/sksareen/sauron/internal/store"
 )
 
 const (
-	intentPollInterval  = 10 * time.Second
-	defaultTraceWindow  = 30 // minutes
+	intentPollInterval = 10 * time.Second
+	defaultTraceWindow = 30 // minutes
 )
 
 // intentPoller watches for outcomes (git commits, agentgraph entries) and creates intent traces.
@@ -111,6 +112,9 @@ func (p *intentPoller) checkGitCommits() {
 
 		log.Printf("intent: git commit detected in %s: %s", filepath.Base(dir), currentHash[:8])
 		p.createTrace("git_commit", detail)
+		if err := reentry.RecordCommitOutcome(p.db, dir, msg, currentHash, time.Now().Unix()); err != nil {
+			log.Printf("reentry: git commit trace failed: %v", err)
+		}
 	}
 }
 

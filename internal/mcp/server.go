@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/sksareen/sauron/internal/embed"
 	"github.com/sksareen/sauron/internal/query"
+	"github.com/sksareen/sauron/internal/reentry"
 	"github.com/sksareen/sauron/internal/scrub"
 	"github.com/sksareen/sauron/internal/store"
 )
@@ -183,6 +185,97 @@ func Start() error {
 		},
 	)
 
+	// ── v2 project re-entry tools ───────────────────────────────────────────
+
+	s.AddTool(
+		mcp.NewTool("sauron_current_loop",
+			mcp.WithDescription("Get the current v2 project/task open loop inferred from local activity. This reads the parallel v2 task model and does not modify legacy traces."),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			loop, err := reentry.CurrentLoop(db)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(mcpJSON(loop)), nil
+		},
+	)
+
+	s.AddTool(
+		mcp.NewTool("sauron_reentry_context",
+			mcp.WithDescription("Get the best soft re-entry card: prior task, last useful state, evidence summaries, interruption reason, and next action."),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if _, err := reentry.Evaluate(db, 0); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			card, err := reentry.ReentryContext(db)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(mcpJSON(card)), nil
+		},
+	)
+
+	s.AddTool(
+		mcp.NewTool("sauron_mark_task",
+			mcp.WithDescription("Create, update, complete, or correct a v2 open task. Writes only to the parallel v2 task/trace tables."),
+			mcp.WithString("goal",
+				mcp.Description("The task goal or correction. Required unless completing an existing task."),
+			),
+			mcp.WithString("status",
+				mcp.Description("active, paused, completed, or abandoned (default: active)"),
+			),
+			mcp.WithString("task_id",
+				mcp.Description("Optional v2 task_id to complete"),
+			),
+			mcp.WithString("project",
+				mcp.Description("Optional project name or hint"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			goal, _ := req.RequireString("goal")
+			status, _ := req.RequireString("status")
+			taskID, _ := req.RequireString("task_id")
+			project, _ := req.RequireString("project")
+			if status == "completed" || status == "complete" || status == "done" {
+				task, err := reentry.CompleteTask(db, taskID)
+				if err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+				return mcp.NewToolResultText(mcpJSON(task)), nil
+			}
+			if strings.TrimSpace(goal) == "" {
+				return mcp.NewToolResultError("goal is required unless status is completed"), nil
+			}
+			task, err := reentry.MarkTask(db, goal, status, project)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(mcpJSON(task)), nil
+		},
+	)
+
+	s.AddTool(
+		mcp.NewTool("sauron_explain_trace",
+			mcp.WithDescription("Explain a v2 human trace with linked evidence summaries. Pass trace_id or 'latest'."),
+			mcp.WithString("trace_id",
+				mcp.Description("The v2 trace_id to explain, or latest"),
+				mcp.Required(),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			traceID, err := req.RequireString("trace_id")
+			if err != nil {
+				return mcp.NewToolResultError("trace_id parameter required"), nil
+			}
+			explained, err := reentry.ExplainTrace(db, traceID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(mcpJSON(explained)), nil
+		},
+	)
+
 	// ── experience graph tools ─────────────────────────────────────────────
 
 	// sauron_check_experience — semantic search over agent experiences
@@ -317,6 +410,27 @@ func Start() error {
 		},
 	)
 
+	// sauron_hints — active Human Intention Vectors
+	s.AddTool(
+		mcp.NewTool("sauron_hints",
+			mcp.WithDescription("Get active Human Intention Vectors — LLM-inferred labels of what the user is working on right now, with weight, evidence, and confidence."),
+			mcp.WithNumber("limit",
+				mcp.Description("Max hints to return (default: 3)"),
+			),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			limit := req.GetInt("limit", 3)
+			if limit <= 0 {
+				limit = 3
+			}
+			hints, err := query.GetHints(db, limit)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(query.FormatHints(hints, "human")), nil
+		},
+	)
+
 	return server.ServeStdio(s)
 }
 
@@ -330,4 +444,9 @@ func splitCSV(s string) []string {
 		}
 	}
 	return parts
+}
+
+func mcpJSON(v interface{}) string {
+	b, _ := json.MarshalIndent(v, "", "  ")
+	return string(b)
 }

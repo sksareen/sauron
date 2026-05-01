@@ -133,9 +133,13 @@ func Status() error {
 	var sessionCount int
 	db.QueryRow("SELECT COUNT(*) FROM context_sessions").Scan(&sessionCount)
 
+	var vercelCount int
+	db.QueryRow("SELECT COUNT(*) FROM live_vercel_logs").Scan(&vercelCount)
+
 	fmt.Printf("clipboard captures: %d\n", clipCount)
 	fmt.Printf("activity entries:   %d\n", activityCount)
 	fmt.Printf("sessions:           %d\n", sessionCount)
+	fmt.Printf("live:vercel logs:   %d (watching %s)\n", vercelCount, VercelDeploymentURL())
 	return nil
 }
 
@@ -193,6 +197,17 @@ func RunDaemon() error {
 	go runClipboardPoller(ctx, db, ss)
 	go runActivityPoller(ctx, db, ss)
 	go runIntentPoller(ctx, db)
+	go runReentryPoller(ctx, db)
+	go runHintPoller(ctx, db)
+
+	// Start live:vercel poller. Gate on the CLI being installed + authed so
+	// we fail loudly on startup and don't silently swallow auth errors.
+	vercelURL := VercelDeploymentURL()
+	if err := EnsureVercelCLI(ctx); err != nil {
+		log.Printf("vercel: disabled — %v", err)
+	} else {
+		go RunVercelPoller(ctx, db, vercelURL)
+	}
 
 	log.Println("sauron daemon running")
 	<-ctx.Done()

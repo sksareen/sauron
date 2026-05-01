@@ -10,11 +10,11 @@ import (
 
 // ActivitySummary is an aggregated view of activity over a time window.
 type ActivitySummary struct {
-	Hours      float64            `json:"hours"`
-	FocusScore float64            `json:"focus_score"`
-	AppBreakdown map[string]float64 `json:"app_breakdown"` // app -> minutes
-	TotalApps  int                `json:"total_apps"`
-	Switches   int                `json:"switches"`
+	Hours        float64            `json:"hours"`
+	FocusScore   float64            `json:"focus_score"`
+	AppBreakdown map[string]float64 `json:"app_breakdown"` // app -> hours
+	TotalApps    int                `json:"total_apps"`
+	Switches     int                `json:"switches"`
 }
 
 // GetActivity returns an activity summary for the last h hours.
@@ -35,8 +35,8 @@ func GetActivity(db *store.DB, hours float64) (*ActivitySummary, error) {
 		if ms == 0 {
 			ms = 5000 // estimate 5s for still-running entries
 		}
-		minutes := float64(ms) / 60000.0
-		summary.AppBreakdown[e.AppName] += minutes
+		hours := float64(ms) / 3600000.0
+		summary.AppBreakdown[e.AppName] += hours
 		apps[e.AppName] = struct{}{}
 	}
 
@@ -71,9 +71,16 @@ func formatActivityHuman(s *ActivitySummary) string {
 	sb.WriteString(fmt.Sprintf("last %.0fh  focus: %.0f%%  apps: %d  switches: %d\n\n",
 		s.Hours, s.FocusScore*100, s.TotalApps, s.Switches))
 
+	total := totalHours(s.AppBreakdown)
 	for _, kv := range sortedByValue(s.AppBreakdown) {
-		bar := progressBar(kv.Value, totalMinutes(s.AppBreakdown), 20)
-		sb.WriteString(fmt.Sprintf("  %-30s %s  %.0fm\n", kv.Key, bar, kv.Value))
+		bar := progressBar(kv.Value, total, 20)
+		h := int(kv.Value)
+		m := int((kv.Value - float64(h)) * 60)
+		dur := fmt.Sprintf("%dh %dm", h, m)
+		if h == 0 {
+			dur = fmt.Sprintf("%dm", m)
+		}
+		sb.WriteString(fmt.Sprintf("  %-30s %s  %s\n", kv.Key, bar, dur))
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
@@ -102,7 +109,7 @@ func focusScoreFromSwitches(switches int) float64 {
 	return score
 }
 
-func totalMinutes(breakdown map[string]float64) float64 {
+func totalHours(breakdown map[string]float64) float64 {
 	var total float64
 	for _, v := range breakdown {
 		total += v

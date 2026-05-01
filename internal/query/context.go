@@ -20,12 +20,17 @@ type LocalServer struct {
 
 // ContextSummary is a high-level view of what the user is doing right now.
 type ContextSummary struct {
-	SessionType      string        `json:"session_type"`
-	FocusScore       float64       `json:"focus_score"`
-	SessionAgeMin    float64       `json:"session_age_min"`
-	DominantApp      string        `json:"dominant_app"`
-	RecentClipboard  []string      `json:"recent_clipboard"`
-	LocalServers     []LocalServer `json:"local_servers,omitempty"`
+	// Semantic layer — what matters for re-entry
+	OpenThread      string   `json:"open_thread,omitempty"`
+	NextAction      string   `json:"next_action,omitempty"`
+	RecentDecisions []string `json:"recent_decisions,omitempty"`
+	// Mechanics — session state and environment
+	SessionType     string        `json:"session_type"`
+	FocusScore      float64       `json:"focus_score"`
+	SessionAgeMin   float64       `json:"session_age_min"`
+	DominantApp     string        `json:"dominant_app"`
+	RecentClipboard []string      `json:"recent_clipboard"`
+	LocalServers    []LocalServer `json:"local_servers,omitempty"`
 }
 
 // GetContext builds a ContextSummary from the database.
@@ -36,6 +41,19 @@ func GetContext(db *store.DB) (*ContextSummary, error) {
 	}
 
 	s := &ContextSummary{}
+
+	// Pull open task first — the most important thing to surface on re-entry.
+	if task, err := store.GetActiveOpenTask(db); err == nil && task != nil {
+		s.OpenThread = task.Goal
+		s.NextAction = task.NextAction
+	}
+
+	// Last 2 logged experiences as decision trail.
+	if decisions, err := store.GetRecentExperiences(db, 2); err == nil {
+		for _, d := range decisions {
+			s.RecentDecisions = append(s.RecentDecisions, d.TaskIntent)
+		}
+	}
 
 	if session != nil {
 		s.SessionType = session.SessionType
@@ -90,6 +108,19 @@ func FormatContext(s *ContextSummary, format string) string {
 
 func formatContextHuman(s *ContextSummary) string {
 	var sb strings.Builder
+	hasSemantics := s.OpenThread != "" || len(s.RecentDecisions) > 0
+	if s.OpenThread != "" {
+		sb.WriteString(fmt.Sprintf("open:       %s\n", s.OpenThread))
+	}
+	if s.NextAction != "" {
+		sb.WriteString(fmt.Sprintf("next:       %s\n", s.NextAction))
+	}
+	for _, d := range s.RecentDecisions {
+		sb.WriteString(fmt.Sprintf("decided:    %s\n", d))
+	}
+	if hasSemantics {
+		sb.WriteString("---\n")
+	}
 	sb.WriteString(fmt.Sprintf("session:    %s\n", s.SessionType))
 	sb.WriteString(fmt.Sprintf("focus:      %.0f%%\n", s.FocusScore*100))
 	if s.SessionAgeMin > 0 {

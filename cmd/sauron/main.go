@@ -20,6 +20,7 @@ import (
 	"github.com/sksareen/sauron/internal/install"
 	mcpserver "github.com/sksareen/sauron/internal/mcp"
 	"github.com/sksareen/sauron/internal/query"
+	"github.com/sksareen/sauron/internal/reentry"
 	"github.com/sksareen/sauron/internal/store"
 )
 
@@ -301,6 +302,130 @@ func main() {
 	tracesCmd.Flags().IntVar(&tracesLimit, "limit", 10, "number of traces to show")
 	root.AddCommand(tracesCmd)
 
+	// ── v2 project re-entry traces ───────────────────────────────────────────
+
+	taskCmd := &cobra.Command{
+		Use:   "task",
+		Short: "Manage v2 project re-entry tasks",
+	}
+
+	var taskProject, taskStatus string
+	var taskJSON bool
+	taskMarkCmd := &cobra.Command{
+		Use:   "mark <goal>",
+		Short: "Mark or correct the current v2 open task",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := store.Open()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+
+			task, err := reentry.MarkTask(db, strings.Join(args, " "), taskStatus, taskProject)
+			if err != nil {
+				return err
+			}
+			if taskJSON {
+				b, _ := json.MarshalIndent(task, "", "  ")
+				fmt.Println(string(b))
+				return nil
+			}
+			fmt.Printf("task %s %s\n", task.TaskID, task.Status)
+			fmt.Printf("goal: %s\n", task.Goal)
+			fmt.Printf("next: %s\n", task.NextAction)
+			return nil
+		},
+	}
+	taskMarkCmd.Flags().StringVar(&taskProject, "project", "", "project name or hint")
+	taskMarkCmd.Flags().StringVar(&taskStatus, "status", "active", "active, paused, completed, or abandoned")
+	taskMarkCmd.Flags().BoolVar(&taskJSON, "json", false, "machine-readable JSON output")
+	taskCmd.AddCommand(taskMarkCmd)
+
+	var taskCompleteJSON bool
+	taskCompleteCmd := &cobra.Command{
+		Use:   "complete [task_id]",
+		Short: "Mark a v2 task complete",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := store.Open()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+
+			taskID := ""
+			if len(args) > 0 {
+				taskID = args[0]
+			}
+			task, err := reentry.CompleteTask(db, taskID)
+			if err != nil {
+				return err
+			}
+			if taskCompleteJSON {
+				b, _ := json.MarshalIndent(task, "", "  ")
+				fmt.Println(string(b))
+				return nil
+			}
+			fmt.Printf("completed %s\n", task.TaskID)
+			return nil
+		},
+	}
+	taskCompleteCmd.Flags().BoolVar(&taskCompleteJSON, "json", false, "machine-readable JSON output")
+	taskCmd.AddCommand(taskCompleteCmd)
+	root.AddCommand(taskCmd)
+
+	var reentryJSON, reentryMD bool
+	reentryCmd := &cobra.Command{
+		Use:   "reentry",
+		Short: "Show the v2 return-to-task card",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := store.Open()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+
+			if _, err := reentry.Evaluate(db, time.Now().Unix()); err != nil {
+				return err
+			}
+			card, err := reentry.ReentryContext(db)
+			if err != nil {
+				return err
+			}
+			fmt.Println(formatReentryCard(card, formatFlag(reentryJSON, reentryMD)))
+			return nil
+		},
+	}
+	reentryCmd.Flags().BoolVar(&reentryJSON, "json", false, "machine-readable JSON output")
+	reentryCmd.Flags().BoolVar(&reentryMD, "md", false, "markdown output")
+	root.AddCommand(reentryCmd)
+
+	var tracesV2JSON, tracesV2MD bool
+	var tracesV2Limit int
+	tracesV2Cmd := &cobra.Command{
+		Use:   "traces-v2",
+		Short: "List recent v2 human traces",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := store.OpenReadOnly()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+
+			traces, err := reentry.RecentTraces(db, tracesV2Limit)
+			if err != nil {
+				return err
+			}
+			fmt.Println(formatHumanTraces(traces, formatFlag(tracesV2JSON, tracesV2MD)))
+			return nil
+		},
+	}
+	tracesV2Cmd.Flags().BoolVar(&tracesV2JSON, "json", false, "machine-readable JSON output")
+	tracesV2Cmd.Flags().BoolVar(&tracesV2MD, "md", false, "markdown output")
+	tracesV2Cmd.Flags().IntVar(&tracesV2Limit, "limit", 10, "number of v2 traces to show")
+	root.AddCommand(tracesV2Cmd)
+
 	// ── capture (screenshot → annotate → route) ────────────────────────────────
 
 	var captureRegister, captureSourceApp, captureBundleID string
@@ -412,8 +537,8 @@ func main() {
 	// ── experience graph ──────────────────────────────────────────────────────
 
 	expCmd := &cobra.Command{
-		Use:   "experience",
-		Short: "Agent experience graph commands",
+		Use:     "experience",
+		Short:   "Agent experience graph commands",
 		Aliases: []string{"exp"},
 	}
 
@@ -465,6 +590,86 @@ func main() {
 	expStatsCmd.Flags().BoolVar(&expStatsJSON, "json", false, "JSON output")
 	expCmd.AddCommand(expStatsCmd)
 
+	var (
+		expLogTaskIntent    string
+		expLogApproach      string
+		expLogOutcome       string
+		expLogToolsUsed     string
+		expLogFailurePoints string
+		expLogResolution    string
+		expLogTags          string
+	)
+	expLogCmd := &cobra.Command{
+		Use:   "log",
+		Short: "Log a completed experience to the agent graph",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if expLogTaskIntent == "" {
+				return fmt.Errorf("--task-intent is required")
+			}
+			if expLogApproach == "" {
+				expLogApproach = expLogTaskIntent
+			}
+			if expLogOutcome == "" {
+				expLogOutcome = "partial"
+			}
+			if expLogOutcome != "success" && expLogOutcome != "failure" && expLogOutcome != "partial" {
+				return fmt.Errorf("--outcome must be success, failure, or partial")
+			}
+
+			db, err := store.Open()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+
+			rec := &store.ExperienceRecord{
+				TaskIntent: expLogTaskIntent,
+				Approach:   expLogApproach,
+				Outcome:    expLogOutcome,
+				Resolution: expLogResolution,
+				Source:     "cli",
+			}
+			if expLogToolsUsed != "" {
+				rec.ToolsUsed = strings.Split(expLogToolsUsed, ",")
+				for i, t := range rec.ToolsUsed {
+					rec.ToolsUsed[i] = strings.TrimSpace(t)
+				}
+			}
+			if expLogFailurePoints != "" {
+				rec.FailurePoints = strings.Split(expLogFailurePoints, ",")
+				for i, t := range rec.FailurePoints {
+					rec.FailurePoints[i] = strings.TrimSpace(t)
+				}
+			}
+			if expLogTags != "" {
+				rec.Tags = strings.Split(expLogTags, ",")
+				for i, t := range rec.Tags {
+					rec.Tags[i] = strings.TrimSpace(t)
+				}
+			}
+
+			if vec, err := embed.GetEmbedding(rec.TaskIntent + "\n" + rec.Approach); err == nil && vec != nil {
+				rec.Embedding = embed.VectorToBytes(vec)
+			}
+
+			id, err := store.InsertExperience(db, rec)
+			if err != nil {
+				return err
+			}
+			count, _ := store.GetExperienceCount(db)
+			fmt.Printf("logged experience id=%d  total=%d\n", id, count)
+			return nil
+		},
+	}
+	expLogCmd.Flags().StringVar(&expLogTaskIntent, "task-intent", "", "what was the task (required)")
+	expLogCmd.Flags().StringVar(&expLogApproach, "approach", "", "what approach was taken")
+	expLogCmd.Flags().StringVar(&expLogOutcome, "outcome", "partial", "success, failure, or partial")
+	expLogCmd.Flags().StringVar(&expLogToolsUsed, "tools", "", "comma-separated tools used")
+	expLogCmd.Flags().StringVar(&expLogFailurePoints, "failures", "", "comma-separated failure points")
+	expLogCmd.Flags().StringVar(&expLogResolution, "resolution", "", "how failures were resolved")
+	expLogCmd.Flags().StringVar(&expLogTags, "tags", "", "comma-separated tags")
+	expCmd.AddCommand(expLogCmd)
+
 	var expRecentJSON bool
 	expRecentCmd := &cobra.Command{
 		Use:   "recent [n]",
@@ -497,6 +702,31 @@ func main() {
 	expCmd.AddCommand(expRecentCmd)
 
 	root.AddCommand(expCmd)
+
+	// ── hints ──────────────────────────────────────────────────────────────────
+
+	var hintsJSON bool
+	var hintsLimit int
+	hintsCmd := &cobra.Command{
+		Use:   "hints",
+		Short: "Show active Human Intention Vectors",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := store.OpenReadOnly()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			hints, err := query.GetHints(db, hintsLimit)
+			if err != nil {
+				return err
+			}
+			fmt.Println(query.FormatHints(hints, formatFlag(hintsJSON, false)))
+			return nil
+		},
+	}
+	hintsCmd.Flags().BoolVar(&hintsJSON, "json", false, "JSON output")
+	hintsCmd.Flags().IntVar(&hintsLimit, "limit", 5, "max hints to show")
+	root.AddCommand(hintsCmd)
 
 	// ── install/uninstall ──────────────────────────────────────────────────────
 
@@ -652,4 +882,85 @@ func formatFlag(asJSON, asMD bool) string {
 		return "md"
 	}
 	return "human"
+}
+
+func formatReentryCard(card *reentry.ReentryCard, format string) string {
+	if card == nil {
+		return "no re-entry context available"
+	}
+	if format == "json" {
+		b, _ := json.MarshalIndent(card, "", "  ")
+		return string(b)
+	}
+	var sb strings.Builder
+	if format == "md" {
+		sb.WriteString("## Re-entry\n\n")
+	}
+	if card.Task == nil {
+		sb.WriteString(card.Reason)
+		sb.WriteString("\n")
+		sb.WriteString("next: ")
+		sb.WriteString(card.NextAction)
+		return strings.TrimRight(sb.String(), "\n")
+	}
+	if card.Project != nil {
+		sb.WriteString(fmt.Sprintf("project: %s\n", card.Project.Name))
+	}
+	sb.WriteString(fmt.Sprintf("task:    %s\n", card.Task.Goal))
+	sb.WriteString(fmt.Sprintf("status:  %s (%.0f%% confidence)\n", card.Task.Status, card.Confidence*100))
+	if card.Reason != "" {
+		sb.WriteString(fmt.Sprintf("reason:  %s\n", card.Reason))
+	}
+	if card.Task.LastUsefulState != "" {
+		sb.WriteString(fmt.Sprintf("left:    %s\n", card.Task.LastUsefulState))
+	}
+	if card.NextAction != "" {
+		sb.WriteString(fmt.Sprintf("next:    %s\n", card.NextAction))
+	}
+	if len(card.Events) > 0 {
+		sb.WriteString("evidence:\n")
+		for _, e := range card.Events {
+			sb.WriteString(fmt.Sprintf("  - %s: %s\n", time.Unix(e.Ts, 0).Format("15:04:05"), e.Summary))
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func formatHumanTraces(traces []store.HumanTrace, format string) string {
+	if format == "json" {
+		b, _ := json.MarshalIndent(traces, "", "  ")
+		return string(b)
+	}
+	if len(traces) == 0 {
+		if format == "md" {
+			return "## V2 Human Traces\n\n_No v2 traces recorded._"
+		}
+		return "no v2 traces recorded yet"
+	}
+	var sb strings.Builder
+	if format == "md" {
+		sb.WriteString(fmt.Sprintf("## V2 Human Traces (%d)\n\n", len(traces)))
+	} else {
+		sb.WriteString(fmt.Sprintf("%d v2 trace(s)\n\n", len(traces)))
+	}
+	for _, t := range traces {
+		ts := time.Unix(t.CompletedAt, 0).Format("2006-01-02 15:04")
+		if format == "md" {
+			sb.WriteString(fmt.Sprintf("### %s - %s\n\n", ts, t.TraceType))
+			sb.WriteString(fmt.Sprintf("- **Status**: %s\n", t.Status))
+			sb.WriteString(fmt.Sprintf("- **Summary**: %s\n", t.Summary))
+			if t.NextAction != "" {
+				sb.WriteString(fmt.Sprintf("- **Next**: %s\n", t.NextAction))
+			}
+			sb.WriteString("\n")
+		} else {
+			sb.WriteString(fmt.Sprintf("%s  %s  %s\n", ts, t.TraceType, t.Status))
+			sb.WriteString(fmt.Sprintf("    %s\n", t.Summary))
+			if t.NextAction != "" {
+				sb.WriteString(fmt.Sprintf("    next: %s\n", t.NextAction))
+			}
+			sb.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }

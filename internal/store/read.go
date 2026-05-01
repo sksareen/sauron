@@ -270,6 +270,60 @@ LIMIT ?`
 	return items, rows.Err()
 }
 
+// GetVercelLogsInRange returns live:vercel log rows captured within a unix time range.
+func GetVercelLogsInRange(db *DB, start, end int64) ([]VercelLog, error) {
+	const q = `
+SELECT id, deployment_url, COALESCE(level,''), COALESCE(method,''),
+       COALESCE(path,''), COALESCE(status_code,0), message, captured_at
+FROM live_vercel_logs
+WHERE captured_at >= ? AND captured_at <= ?
+ORDER BY captured_at ASC`
+
+	rows, err := db.Query(q, start, end)
+	if err != nil {
+		return nil, fmt.Errorf("query vercel logs range: %w", err)
+	}
+	defer rows.Close()
+
+	var items []VercelLog
+	for rows.Next() {
+		var v VercelLog
+		if err := rows.Scan(&v.ID, &v.DeploymentURL, &v.Level, &v.Method,
+			&v.Path, &v.StatusCode, &v.Message, &v.CapturedAt); err != nil {
+			return nil, fmt.Errorf("scan vercel log row: %w", err)
+		}
+		items = append(items, v)
+	}
+	return items, rows.Err()
+}
+
+// GetRecentVercelLogs returns the most recent n live:vercel log rows.
+func GetRecentVercelLogs(db *DB, n int) ([]VercelLog, error) {
+	const q = `
+SELECT id, deployment_url, COALESCE(level,''), COALESCE(method,''),
+       COALESCE(path,''), COALESCE(status_code,0), message, captured_at
+FROM live_vercel_logs
+ORDER BY captured_at DESC
+LIMIT ?`
+
+	rows, err := db.Query(q, n)
+	if err != nil {
+		return nil, fmt.Errorf("query recent vercel logs: %w", err)
+	}
+	defer rows.Close()
+
+	var items []VercelLog
+	for rows.Next() {
+		var v VercelLog
+		if err := rows.Scan(&v.ID, &v.DeploymentURL, &v.Level, &v.Method,
+			&v.Path, &v.StatusCode, &v.Message, &v.CapturedAt); err != nil {
+			return nil, fmt.Errorf("scan vercel log row: %w", err)
+		}
+		items = append(items, v)
+	}
+	return items, rows.Err()
+}
+
 // GetScreenshotsInRange returns screenshots within a unix time range.
 func GetScreenshotsInRange(db *DB, start, end int64) ([]Screenshot, error) {
 	const q = `
@@ -375,6 +429,205 @@ func GetExperienceStats(db *DB) (total, success, failure, partial int, err error
 	db.QueryRow("SELECT COUNT(*) FROM experiences WHERE outcome='failure'").Scan(&failure)
 	db.QueryRow("SELECT COUNT(*) FROM experiences WHERE outcome='partial'").Scan(&partial)
 	return
+}
+
+// GetProjectByID returns a v2 project by row ID.
+func GetProjectByID(db *DB, id int64) (*Project, error) {
+	const q = `
+SELECT id, project_key, name, kind, root_hint, created_at, updated_at, metadata_json
+FROM projects
+WHERE id = ?`
+	var p Project
+	err := db.QueryRow(q, id).Scan(&p.ID, &p.ProjectKey, &p.Name, &p.Kind, &p.RootHint, &p.CreatedAt, &p.UpdatedAt, &p.MetadataJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query project: %w", err)
+	}
+	return &p, nil
+}
+
+// GetProjectByKey returns a v2 project by stable project key.
+func GetProjectByKey(db *DB, key string) (*Project, error) {
+	const q = `
+SELECT id, project_key, name, kind, root_hint, created_at, updated_at, metadata_json
+FROM projects
+WHERE project_key = ?`
+	var p Project
+	err := db.QueryRow(q, key).Scan(&p.ID, &p.ProjectKey, &p.Name, &p.Kind, &p.RootHint, &p.CreatedAt, &p.UpdatedAt, &p.MetadataJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query project by key: %w", err)
+	}
+	return &p, nil
+}
+
+// GetActiveOpenTask returns the most recently updated active or paused v2 task.
+func GetActiveOpenTask(db *DB) (*OpenTask, error) {
+	const q = `
+SELECT id, task_id, COALESCE(project_id,0), status, goal, last_useful_state,
+       next_action, confidence, started_at, updated_at, COALESCE(completed_at,0),
+       completion_source, metadata_json
+FROM open_tasks
+WHERE status IN ('active', 'paused')
+ORDER BY updated_at DESC
+LIMIT 1`
+	rows, err := db.Query(q)
+	if err != nil {
+		return nil, fmt.Errorf("query active open task: %w", err)
+	}
+	defer rows.Close()
+	tasks, err := scanOpenTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+	return &tasks[0], nil
+}
+
+// GetOpenTaskByTaskID returns a v2 task by stable task ID.
+func GetOpenTaskByTaskID(db *DB, taskID string) (*OpenTask, error) {
+	const q = `
+SELECT id, task_id, COALESCE(project_id,0), status, goal, last_useful_state,
+       next_action, confidence, started_at, updated_at, COALESCE(completed_at,0),
+       completion_source, metadata_json
+FROM open_tasks
+WHERE task_id = ?`
+	rows, err := db.Query(q, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("query open task: %w", err)
+	}
+	defer rows.Close()
+	tasks, err := scanOpenTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return nil, nil
+	}
+	return &tasks[0], nil
+}
+
+// GetRecentHumanTraces returns recent v2 traces.
+func GetRecentHumanTraces(db *DB, n int) ([]HumanTrace, error) {
+	const q = `
+SELECT id, trace_id, trace_type, COALESCE(project_id,0), task_id, trigger_type,
+       status, started_at, completed_at, summary, next_action, confidence, metadata_json
+FROM human_traces
+ORDER BY completed_at DESC
+LIMIT ?`
+	rows, err := db.Query(q, n)
+	if err != nil {
+		return nil, fmt.Errorf("query recent human traces: %w", err)
+	}
+	defer rows.Close()
+	return scanHumanTraces(rows)
+}
+
+// GetHumanTraceByTraceID returns a v2 trace by stable trace ID.
+func GetHumanTraceByTraceID(db *DB, traceID string) (*HumanTrace, error) {
+	const q = `
+SELECT id, trace_id, trace_type, COALESCE(project_id,0), task_id, trigger_type,
+       status, started_at, completed_at, summary, next_action, confidence, metadata_json
+FROM human_traces
+WHERE trace_id = ?`
+	rows, err := db.Query(q, traceID)
+	if err != nil {
+		return nil, fmt.Errorf("query human trace: %w", err)
+	}
+	defer rows.Close()
+	traces, err := scanHumanTraces(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(traces) == 0 {
+		return nil, nil
+	}
+	return &traces[0], nil
+}
+
+// GetLatestHumanTraceByType returns the latest v2 trace of a type.
+func GetLatestHumanTraceByType(db *DB, traceType string) (*HumanTrace, error) {
+	const q = `
+SELECT id, trace_id, trace_type, COALESCE(project_id,0), task_id, trigger_type,
+       status, started_at, completed_at, summary, next_action, confidence, metadata_json
+FROM human_traces
+WHERE trace_type = ?
+ORDER BY completed_at DESC
+LIMIT 1`
+	rows, err := db.Query(q, traceType)
+	if err != nil {
+		return nil, fmt.Errorf("query latest human trace: %w", err)
+	}
+	defer rows.Close()
+	traces, err := scanHumanTraces(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(traces) == 0 {
+		return nil, nil
+	}
+	return &traces[0], nil
+}
+
+// GetHumanTraceEvents returns ordered v2 evidence events for a trace.
+func GetHumanTraceEvents(db *DB, traceID string) ([]HumanTraceEvent, error) {
+	const q = `
+SELECT id, trace_id, ts, event_type, source_table, COALESCE(source_id,0),
+       summary, app_name, window_title, artifact_uri, severity, metadata_json
+FROM human_trace_events
+WHERE trace_id = ?
+ORDER BY ts ASC`
+	rows, err := db.Query(q, traceID)
+	if err != nil {
+		return nil, fmt.Errorf("query human trace events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []HumanTraceEvent
+	for rows.Next() {
+		var e HumanTraceEvent
+		if err := rows.Scan(&e.ID, &e.TraceID, &e.Ts, &e.EventType, &e.SourceTable,
+			&e.SourceID, &e.Summary, &e.AppName, &e.WindowTitle, &e.ArtifactURI,
+			&e.Severity, &e.MetadataJSON); err != nil {
+			return nil, fmt.Errorf("scan human trace event row: %w", err)
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+func scanOpenTasks(rows *sql.Rows) ([]OpenTask, error) {
+	var tasks []OpenTask
+	for rows.Next() {
+		var t OpenTask
+		if err := rows.Scan(&t.ID, &t.TaskID, &t.ProjectID, &t.Status, &t.Goal,
+			&t.LastUsefulState, &t.NextAction, &t.Confidence, &t.StartedAt,
+			&t.UpdatedAt, &t.CompletedAt, &t.CompletionSource, &t.MetadataJSON); err != nil {
+			return nil, fmt.Errorf("scan open task row: %w", err)
+		}
+		tasks = append(tasks, t)
+	}
+	return tasks, rows.Err()
+}
+
+func scanHumanTraces(rows *sql.Rows) ([]HumanTrace, error) {
+	var traces []HumanTrace
+	for rows.Next() {
+		var t HumanTrace
+		if err := rows.Scan(&t.ID, &t.TraceID, &t.TraceType, &t.ProjectID, &t.TaskID,
+			&t.TriggerType, &t.Status, &t.StartedAt, &t.CompletedAt, &t.Summary,
+			&t.NextAction, &t.Confidence, &t.MetadataJSON); err != nil {
+			return nil, fmt.Errorf("scan human trace row: %w", err)
+		}
+		traces = append(traces, t)
+	}
+	return traces, rows.Err()
 }
 
 func scanExperienceRows(rows *sql.Rows) ([]ExperienceRecord, error) {

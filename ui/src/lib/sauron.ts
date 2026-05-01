@@ -21,6 +21,9 @@ async function runJSON<T>(args: string): Promise<T> {
 }
 
 export type Context = {
+  open_thread?: string;
+  next_action?: string;
+  recent_decisions?: string[];
   session_type: string;
   focus_score: number;
   session_age_min: number;
@@ -61,6 +64,63 @@ export type Trace = {
   activity_window_minutes: number;
   started_at: number;
   completed_at: number;
+};
+
+export type ReentryCard = {
+  project?: {
+    id: number;
+    project_key: string;
+    name: string;
+    kind: string;
+    root_hint: string;
+    created_at: number;
+    updated_at: number;
+  };
+  task?: {
+    id: number;
+    task_id: string;
+    project_id: number;
+    status: string;
+    goal: string;
+    last_useful_state: string;
+    next_action: string;
+    confidence: number;
+    started_at: number;
+    updated_at: number;
+    completed_at?: number;
+    completion_source?: string;
+  };
+  trace?: {
+    id: number;
+    trace_id: string;
+    trace_type: string;
+    project_id: number;
+    task_id: string;
+    trigger_type: string;
+    status: string;
+    started_at: number;
+    completed_at: number;
+    summary: string;
+    next_action: string;
+    confidence: number;
+  };
+  events?: {
+    id: number;
+    trace_id: string;
+    ts: number;
+    event_type: string;
+    source_table: string;
+    source_id: number;
+    summary: string;
+    app_name: string;
+    window_title: string;
+    artifact_uri: string;
+    severity: string;
+  }[];
+  reason: string;
+  next_action: string;
+  confidence: number;
+  generated_at: number;
 };
 
 export type Status = {
@@ -116,12 +176,46 @@ export function getTraces(limit = 10) {
   return runJSON<Trace[]>(`traces --limit ${limit}`);
 }
 
+export function getReentryContext() {
+  return runJSON<ReentryCard>("reentry");
+}
+
 export type ExperienceStats = {
   total: number;
   success: number;
   failure: number;
   partial: number;
 };
+
+export type HintEvidence = {
+  id: number;
+  hint_id: string;
+  source_table: string;
+  ts: number;
+  summary: string;
+  app_name: string;
+  window_title: string;
+  severity: string;
+};
+
+export type HintRecord = {
+  id: string;
+  label: string;
+  confidence: number;
+  weight: number;
+  status: string;
+  dominant_app: string;
+  window_pattern: string;
+  started_at: number;
+  last_active_at: number;
+  labelled_at: number;
+  evidence_count: number;
+  evidence: HintEvidence[];
+};
+
+export function getHints(limit = 5) {
+  return runJSON<HintRecord[]>(`hints --limit ${limit}`);
+}
 
 export async function getExperienceStats(): Promise<ExperienceStats> {
   try {

@@ -1,20 +1,37 @@
 @import "tailwindcss";
 
 @theme {
-  --color-paper: #f7f6f3;
-  --color-paper-soft: #efede8;
-  --color-ink: #1c1b1a;
-  --color-ink-soft: #6b6864;
-  --color-ink-faint: #a8a49e;
-  --color-rule: #e5e2dc;
-  --color-accent: #5b6c5d;
-  --color-accent-soft: #c9d1ca;
-  --color-signal: #b8614a;
+  --color-paper: #fbfaf7;
+  --color-paper-soft: #eeeae1;
+  --color-ink: #111315;
+  --color-ink-soft: #3f4542;
+  --color-ink-faint: #6b746d;
+  --color-rule: #c7bfb2;
+  --color-accent: #1f6b49;
+  --color-accent-soft: #c2ddcc;
+  --color-signal: #a83b24;
 
-  --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Inter",
-    "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-sans: "Inter Variable", "Inter", "SF Pro Text", ui-sans-serif,
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     monospace;
+}
+
+:root[data-theme="dark"] {
+  --color-paper: #0f1115;
+  --color-paper-soft: #1b2028;
+  --color-ink: #f5f7fb;
+  --color-ink-soft: #c9d1dc;
+  --color-ink-faint: #97a3b3;
+  --color-rule: #3d4656;
+  --color-accent: #7dd3a7;
+  --color-accent-soft: #203a2d;
+  --color-signal: #ff9a73;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 html,
@@ -23,9 +40,12 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
   font-feature-settings: "ss01", "cv11", "tnum";
+  font-weight: 450;
+  font-size: 15px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  letter-spacing: -0.005em;
+  letter-spacing: 0;
 }
 
 .tnum {
@@ -36,8 +56,8 @@ body {
   font-size: 11px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
-  color: var(--color-ink-faint);
-  font-weight: 500;
+  color: var(--color-ink);
+  font-weight: 750;
 }
 
 .rule {
@@ -63,5 +83,18 @@ body {
   }
   50% {
     opacity: 0.35;
+  }
+}
+
+.flash {
+  animation: flash 1.5s ease-out;
+}
+
+@keyframes flash {
+  0% {
+    background: var(--color-accent-soft);
+  }
+  100% {
+    background: transparent;
   }
 }

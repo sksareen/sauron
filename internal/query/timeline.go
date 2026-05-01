@@ -102,6 +102,23 @@ func GetTimeline(db *store.DB, startUnix, endUnix int64) ([]TimelineEntry, error
 		})
 	}
 
+	// Live Vercel runtime logs (live:vercel source).
+	vlogs, err := store.GetVercelLogsInRange(db, startUnix, endUnix)
+	if err != nil {
+		return nil, fmt.Errorf("timeline vercel: %w", err)
+	}
+	for _, v := range vlogs {
+		meta := v.Level
+		if v.Path != "" || v.StatusCode != 0 {
+			meta = strings.TrimSpace(fmt.Sprintf("%s %s %s %d", v.Level, v.Method, v.Path, v.StatusCode))
+		}
+		entries = append(entries, TimelineEntry{
+			Timestamp: v.CapturedAt,
+			Type:      "live:vercel",
+			Summary:   fmt.Sprintf("[%s] %s", strings.TrimSpace(meta), v.Message),
+		})
+	}
+
 	// Sort by timestamp ascending.
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Timestamp < entries[j].Timestamp
@@ -178,6 +195,8 @@ func typeIcon(t string) string {
 		return "[snap]"
 	case "trace":
 		return "[TRACE]"
+	case "live:vercel":
+		return "[vercel]"
 	default:
 		return "[?]"
 	}
