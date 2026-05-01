@@ -312,16 +312,6 @@ sauron migrate-agentgraph
 
 Copies all records from `~/.agentgraph/experiences.db`, converting Float64 embeddings to Float32. Then remove the `agentgraph` entry from `~/.claude.json`.
 
-### From Sakshi
-
-Sauron's watcher is the same codebase as Sakshi with an identical schema:
-
-```bash
-sakshi stop && sakshi uninstall
-cp ~/.sakshi/sakshi.db ~/.sauron/sauron.db
-sauron install && sauron start
-```
-
 ---
 
 ## How `sauron install` Works
