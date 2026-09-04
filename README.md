@@ -1,12 +1,14 @@
 # Sauron
 
-**The all-seeing eye for Claude Code.**
+**Structured traces of human activity — OAT-style traces, but for how you actually work.**
 
-A passive context daemon for macOS that gives Claude Code total awareness of what you're doing — and memory of what every agent has done before.
+A local-first macOS daemon that captures your digital activity — clipboard, apps, windows, screenshots, git commits — as structured intent → action → outcome traces, building a personal, queryable record of how you work. It doubles as the all-seeing eye for Claude Code: agents get total awareness of what you're doing, plus an experience graph of what every agent has done before.
 
 It watches your clipboard, tracks which apps you're using, takes screenshots, detects git commits, classifies your work sessions, and stores everything in a local SQLite database with vector embeddings for semantic search. It also maintains an **agent experience graph** — a collective memory where agents log what worked, what failed, and what tools helped, so future agents don't repeat the same mistakes.
 
 One binary. One database. 10 MCP tools. Zero cloud dependencies.
+
+> **Roadmap:** segment the raw activity log into complete intent → action → outcome loops — including the deviations and frictions in between — as a training dataset for a personal behavioral model.
 
 <p align="center">
   <img src="assets/demo.gif" alt="Sauron demo — Claude Code calling sauron_activity and sauron_context" width="800">
