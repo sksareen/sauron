@@ -73,16 +73,18 @@ func CheckExperience(db *store.DB, taskDescription, context string, limit int) (
 
 // FormatCheckExperience formats search results for display.
 func FormatCheckExperience(results []ExperienceResult, total int, format string) string {
+	if format == "json" {
+		if results == nil {
+			results = []ExperienceResult{}
+		}
+		b, _ := json.MarshalIndent(results, "", "  ")
+		return string(b)
+	}
 	if len(results) == 0 {
 		if total == 0 {
 			return "No experiences in the graph yet. Use sauron_log_experience to record your first."
 		}
 		return fmt.Sprintf("No relevant experiences found among %d records.", total)
-	}
-
-	if format == "json" {
-		b, _ := json.MarshalIndent(results, "", "  ")
-		return string(b)
 	}
 
 	var sb strings.Builder
@@ -141,13 +143,15 @@ func FormatExperienceStats(total, success, failure, partial int, format string) 
 
 // FormatRecentExperiences formats a list of recent experiences.
 func FormatRecentExperiences(records []store.ExperienceRecord, format string) string {
-	if len(records) == 0 {
-		return "No experiences recorded yet."
-	}
-
 	if format == "json" {
+		if records == nil {
+			records = []store.ExperienceRecord{}
+		}
 		b, _ := json.MarshalIndent(records, "", "  ")
 		return string(b)
+	}
+	if len(records) == 0 {
+		return "No experiences recorded yet."
 	}
 
 	var sb strings.Builder

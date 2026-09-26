@@ -24,23 +24,13 @@ type ActivityEntry struct {
 
 // ContextSession represents a classified work session.
 type ContextSession struct {
-	ID           int64   `json:"id"`
-	SessionType  string  `json:"session_type"`
-	FocusScore   float64 `json:"focus_score"`
-	StartedAt    int64   `json:"started_at"`
-	EndedAt      int64   `json:"ended_at"`
-	AppSwitches  int     `json:"app_switches"`
-	DominantApp  string  `json:"dominant_app"`
-}
-
-// Screenshot represents a captured screenshot file reference.
-type Screenshot struct {
-	ID          int64  `json:"id"`
-	FilePath    string `json:"file_path"`
-	SourceApp   string `json:"source_app"`
-	BundleID    string `json:"bundle_id"`
-	WindowTitle string `json:"window_title"`
-	CapturedAt  int64  `json:"captured_at"`
+	ID          int64   `json:"id"`
+	SessionType string  `json:"session_type"`
+	FocusScore  float64 `json:"focus_score"`
+	StartedAt   int64   `json:"started_at"`
+	EndedAt     int64   `json:"ended_at"`
+	AppSwitches int     `json:"app_switches"`
+	DominantApp string  `json:"dominant_app"`
 }
 
 // SearchResult is a result from full-text search.
@@ -72,13 +62,13 @@ type ExperienceRecord struct {
 
 // IntentTrace represents a detected outcome and the activity trace leading to it.
 type IntentTrace struct {
-	ID                   int64   `json:"id"`
-	OutcomeType          string  `json:"outcome_type"`
-	OutcomeDetail        string  `json:"outcome_detail"`
-	TraceSummary         string  `json:"trace_summary"`
-	Embedding            []byte  `json:"embedding,omitempty"`
+	ID                    int64  `json:"id"`
+	OutcomeType           string `json:"outcome_type"`
+	OutcomeDetail         string `json:"outcome_detail"`
+	TraceSummary          string `json:"trace_summary"`
+	Embedding             []byte `json:"embedding,omitempty"`
 	ActivityWindowMinutes int    `json:"activity_window_minutes"`
-	StartedAt            int64   `json:"started_at"`
-	CompletedAt          int64   `json:"completed_at"`
-	RawEvents            string  `json:"raw_events,omitempty"`
+	StartedAt             int64  `json:"started_at"`
+	CompletedAt           int64  `json:"completed_at"`
+	RawEvents             string `json:"raw_events,omitempty"`
 }

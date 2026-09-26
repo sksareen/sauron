@@ -136,6 +136,12 @@ func Status() error {
 	fmt.Printf("clipboard captures: %d\n", clipCount)
 	fmt.Printf("activity entries:   %d\n", activityCount)
 	fmt.Printf("sessions:           %d\n", sessionCount)
+
+	var liveApp string
+	_ = db.QueryRow("SELECT app_name FROM activity_log ORDER BY started_at DESC LIMIT 1").Scan(&liveApp)
+	if liveApp != "" {
+		fmt.Printf("live: %s\n", liveApp)
+	}
 	return nil
 }
 
@@ -168,30 +174,10 @@ func RunDaemon() error {
 		cancel()
 	}()
 
-	// Start screenshot watcher.
-	screenshotCh, err := WatchScreenshotsDir(ctx)
-	if err != nil {
-		log.Printf("screenshot watcher error: %v", err)
-	} else {
-		go func() {
-			for path := range screenshotCh {
-				appName, bundleID, windowTitle, _ := GetFrontmostApp()
-				ts := time.Now().Unix()
-				if err := store.InsertScreenshot(db, path, appName, bundleID, windowTitle, ts); err != nil {
-					log.Printf("screenshot insert: %v", err)
-				} else {
-					log.Printf("screenshot captured: %s", path)
-				}
-			}
-		}()
-	}
-
-	// Shared screenshotter: 5-second cooldown between captures.
-	ss := NewScreenshotter(db, 5*time.Second)
-
-	// Start clipboard, activity, and intent pollers.
-	go runClipboardPoller(ctx, db, ss)
-	go runActivityPoller(ctx, db, ss)
+	// Clipboard, activity, and intent. No screen capture: that path asked
+	// for Screen Recording and, via window titles, Accessibility.
+	go runClipboardPoller(ctx, db)
+	go runActivityPoller(ctx, db)
 	go runIntentPoller(ctx, db)
 
 	log.Println("sauron daemon running")

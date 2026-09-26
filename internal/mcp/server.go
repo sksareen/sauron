@@ -106,27 +106,6 @@ func Start() error {
 		},
 	)
 
-	// sauron_screenshots
-	s.AddTool(
-		mcp.NewTool("sauron_screenshots",
-			mcp.WithDescription("Get recent screenshots captured from the user's Mac. Returns file paths that can be read with the Read tool to view the images. Screenshots are taken automatically on app switches and clipboard changes."),
-			mcp.WithNumber("n",
-				mcp.Description("Number of screenshots to return (default: 5)"),
-			),
-		),
-		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			n := req.GetInt("n", 5)
-			if n <= 0 {
-				n = 5
-			}
-			items, err := query.GetScreenshots(db, n)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			return mcp.NewToolResultText(query.FormatScreenshots(items, "human")), nil
-		},
-	)
-
 	// sauron_recall — semantic search over intent traces
 	s.AddTool(
 		mcp.NewTool("sauron_recall",
@@ -159,7 +138,7 @@ func Start() error {
 	// sauron_timeline — fused timeline of all event types
 	s.AddTool(
 		mcp.NewTool("sauron_timeline",
-			mcp.WithDescription("Get a fused timeline of activity, clipboard, sessions, and intent traces in a time window. Correlate human context with agent experiences."),
+			mcp.WithDescription("Get a fused timeline of activity, clipboard, sessions, and intent traces in a time window."),
 			mcp.WithNumber("start_time",
 				mcp.Description("Start of window as unix timestamp"),
 				mcp.Required(),

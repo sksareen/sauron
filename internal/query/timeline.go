@@ -76,19 +76,6 @@ func GetTimeline(db *store.DB, startUnix, endUnix int64) ([]TimelineEntry, error
 		})
 	}
 
-	// Screenshots.
-	screenshots, err := store.GetScreenshotsInRange(db, startUnix, endUnix)
-	if err != nil {
-		return nil, fmt.Errorf("timeline screenshots: %w", err)
-	}
-	for _, s := range screenshots {
-		entries = append(entries, TimelineEntry{
-			Timestamp: s.CapturedAt,
-			Type:      "screenshot",
-			Summary:   fmt.Sprintf("[%s] %s — %s", s.SourceApp, s.WindowTitle, s.FilePath),
-		})
-	}
-
 	// Intent traces.
 	traces, err := store.GetTracesInRange(db, startUnix, endUnix)
 	if err != nil {
@@ -114,6 +101,9 @@ func GetTimeline(db *store.DB, startUnix, endUnix int64) ([]TimelineEntry, error
 func FormatTimeline(entries []TimelineEntry, format string) string {
 	switch format {
 	case "json":
+		if entries == nil {
+			entries = []TimelineEntry{}
+		}
 		b, _ := json.MarshalIndent(entries, "", "  ")
 		return string(b)
 	case "md":
@@ -174,8 +164,6 @@ func typeIcon(t string) string {
 		return "[clip]"
 	case "session":
 		return "[sess]"
-	case "screenshot":
-		return "[snap]"
 	case "trace":
 		return "[TRACE]"
 	default:

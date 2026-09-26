@@ -243,60 +243,6 @@ ORDER BY started_at ASC`
 	return sessions, rows.Err()
 }
 
-// GetRecentScreenshots returns the most recent n screenshots.
-func GetRecentScreenshots(db *DB, n int) ([]Screenshot, error) {
-	const q = `
-SELECT id, file_path, COALESCE(source_app,''), COALESCE(bundle_id,''),
-       COALESCE(window_title,''), captured_at
-FROM screenshots
-ORDER BY captured_at DESC
-LIMIT ?`
-
-	rows, err := db.Query(q, n)
-	if err != nil {
-		return nil, fmt.Errorf("query screenshots: %w", err)
-	}
-	defer rows.Close()
-
-	var items []Screenshot
-	for rows.Next() {
-		var s Screenshot
-		if err := rows.Scan(&s.ID, &s.FilePath, &s.SourceApp, &s.BundleID,
-			&s.WindowTitle, &s.CapturedAt); err != nil {
-			return nil, fmt.Errorf("scan screenshot row: %w", err)
-		}
-		items = append(items, s)
-	}
-	return items, rows.Err()
-}
-
-// GetScreenshotsInRange returns screenshots within a unix time range.
-func GetScreenshotsInRange(db *DB, start, end int64) ([]Screenshot, error) {
-	const q = `
-SELECT id, file_path, COALESCE(source_app,''), COALESCE(bundle_id,''),
-       COALESCE(window_title,''), captured_at
-FROM screenshots
-WHERE captured_at >= ? AND captured_at <= ?
-ORDER BY captured_at ASC`
-
-	rows, err := db.Query(q, start, end)
-	if err != nil {
-		return nil, fmt.Errorf("query screenshots range: %w", err)
-	}
-	defer rows.Close()
-
-	var items []Screenshot
-	for rows.Next() {
-		var s Screenshot
-		if err := rows.Scan(&s.ID, &s.FilePath, &s.SourceApp, &s.BundleID,
-			&s.WindowTitle, &s.CapturedAt); err != nil {
-			return nil, fmt.Errorf("scan screenshot row: %w", err)
-		}
-		items = append(items, s)
-	}
-	return items, rows.Err()
-}
-
 // GetExperienceCount returns the total number of experience records.
 func GetExperienceCount(db *DB) (int, error) {
 	var count int

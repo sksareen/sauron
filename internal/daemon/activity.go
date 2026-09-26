@@ -11,13 +11,12 @@ import (
 // activityPoller tracks active application usage.
 type activityPoller struct {
 	db *store.DB
-	ss *Screenshotter
 
-	currentApp     string
+	currentApp      string
 	currentBundleID string
-	currentTitle   string
-	currentID      int64
-	currentStart   int64
+	currentTitle    string
+	currentID       int64
+	currentStart    int64
 
 	// For session classification.
 	recentApps    []string // most-recent first
@@ -29,13 +28,12 @@ type activityPoller struct {
 }
 
 // runActivityPoller polls every 5 seconds and updates session every 30 seconds.
-func runActivityPoller(ctx context.Context, db *store.DB, ss *Screenshotter) {
+func runActivityPoller(ctx context.Context, db *store.DB) {
 	p := &activityPoller{
-		db:           db,
-		ss:           ss,
-		switchWindow: time.Now(),
-		lastActivity: time.Now(),
-		sessionStart: time.Now().Unix(),
+		db:            db,
+		switchWindow:  time.Now(),
+		lastActivity:  time.Now(),
+		sessionStart:  time.Now().Unix(),
 		lastSessionAt: time.Now(),
 	}
 
@@ -90,11 +88,6 @@ func (p *activityPoller) pollActivity() {
 		p.currentStart = nowUnix
 
 		p.switchCount++
-
-		// Screenshot on app switch.
-		if p.ss != nil {
-			go p.ss.Capture("app_switch")
-		}
 
 		// Prepend to recent apps.
 		p.recentApps = append([]string{appName}, p.recentApps...)
