@@ -20,12 +20,14 @@ type LocalServer struct {
 
 // ContextSummary is a high-level view of what the user is doing right now.
 type ContextSummary struct {
-	SessionType      string        `json:"session_type"`
-	FocusScore       float64       `json:"focus_score"`
-	SessionAgeMin    float64       `json:"session_age_min"`
-	DominantApp      string        `json:"dominant_app"`
-	RecentClipboard  []string      `json:"recent_clipboard"`
-	LocalServers     []LocalServer `json:"local_servers,omitempty"`
+	SessionType     string        `json:"session_type"`
+	FocusScore      float64       `json:"focus_score"`
+	SessionAgeMin   float64       `json:"session_age_min"`
+	DominantApp     string        `json:"dominant_app"`
+	OpenThread      string        `json:"open_thread,omitempty"`
+	NextAction      string        `json:"next_action,omitempty"`
+	RecentClipboard []string      `json:"recent_clipboard"`
+	LocalServers    []LocalServer `json:"local_servers,omitempty"`
 }
 
 // GetContext builds a ContextSummary from the database.
@@ -70,6 +72,9 @@ func GetContext(db *store.DB) (*ContextSummary, error) {
 
 	// Listening localhost servers.
 	s.LocalServers = getLocalServers()
+
+	// Valinor's activity header reads these when a session looks stale.
+	s.OpenThread, s.NextAction = OpenThreadFields(db, time.Now())
 
 	return s, nil
 }

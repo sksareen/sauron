@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/sksareen/sauron/internal/daemon"
 )
 
 // plistContent is a format string: args are (executablePath, logPath, logPath).
@@ -31,7 +35,7 @@ const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
 </dict>
 </plist>`
 
-const claudeMDHint = "\n<!-- sauron -->\nYou have access to sauron tools for real-time context and agent memory:\n- Watcher: sauron_context, sauron_clipboard, sauron_activity, sauron_search, sauron_recall, sauron_timeline, sauron_screenshots\n- Experience graph: sauron_check_experience (search past experiences before starting tasks), sauron_log_experience (record completed tasks), sauron_experience_stats\nCheck sauron_context at session start. Check sauron_check_experience before non-trivial tasks. Log experiences after completing tasks.\n<!-- /sauron -->"
+const claudeMDHint = "\n<!-- sauron -->\nYou have access to sauron tools for real-time context and agent memory:\n- Watcher: sauron_context, sauron_clipboard, sauron_activity, sauron_search, sauron_recall, sauron_timeline\n- Experience graph: sauron_check_experience (search past experiences before starting tasks), sauron_log_experience (record completed tasks), sauron_experience_stats\nCheck sauron_context at session start. Check sauron_check_experience before non-trivial tasks. Log experiences after completing tasks.\nSauron does not capture the screen and does not need Accessibility permission.\n<!-- /sauron -->"
 
 // Install sets up the LaunchAgent and MCP registration.
 func Install() error {
@@ -40,8 +44,19 @@ func Install() error {
 		return fmt.Errorf("cannot find home dir: %w", err)
 	}
 
+	// Drop any previously installed screen-capture agent so it cannot prompt.
+	removeCaptureAgent(home)
+
 	// 1. Write LaunchAgent plist.
 	if err := writePlist(home); err != nil {
+		return err
+	}
+
+	exePath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("finding executable: %w", err)
+	}
+	if err := linkValinorBin(exePath); err != nil {
 		return err
 	}
 
@@ -59,9 +74,24 @@ func Install() error {
 	fmt.Println("  LaunchAgent: ~/Library/LaunchAgents/com.sauron.daemon.plist")
 	fmt.Println("  MCP:         registered in ~/.claude.json")
 	fmt.Println("  CLAUDE.md:   hint appended")
+	fmt.Println("  Valinor:     ~/go/bin/sauron")
 	fmt.Println()
 	fmt.Println("Run 'sauron start' to start the daemon now.")
 	fmt.Println("Or log out and back in for the LaunchAgent to pick it up automatically.")
+	return nil
+}
+
+// LaunchFromApp is the double-click entry for Sauron.app.
+func LaunchFromApp() error {
+	if err := Install(); err != nil {
+		return err
+	}
+	if err := daemon.Start(); err != nil && !strings.Contains(err.Error(), "already running") {
+		return err
+	}
+	msg := "Sauron is running in the background.\n\nValinor finds it at ~/go/bin/sauron.\nNo accessibility or screen recording access is required."
+	fmt.Println(msg)
+	_ = exec.Command("osascript", "-e", `display dialog "Sauron is running in the background.\n\nValinor finds it at ~/go/bin/sauron.\nNo accessibility or screen recording access is required." buttons {"OK"} default button "OK" with title "Sauron"`).Run()
 	return nil
 }
 
@@ -73,6 +103,11 @@ func Uninstall() error {
 	}
 
 	errs := []string{}
+
+	removeCaptureAgent(home)
+	if exe, err := os.Executable(); err == nil {
+		removeValinorLink(exe)
+	}
 
 	// Remove plist.
 	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.sauron.daemon.plist")
@@ -222,9 +257,20 @@ func appendClaudeMDHint(home string) error {
 
 	content := string(data)
 
-	// Idempotent — don't add twice.
+	// Refresh an older hint that still advertised screen capture.
 	if strings.Contains(content, "<!-- sauron -->") {
-		return nil
+		if strings.Contains(content, "sauron_screenshots") || strings.Contains(content, "SauronCapture") {
+			cleaned, ok := stripClaudeHint(content)
+			if !ok {
+				return nil
+			}
+			if err := os.WriteFile(claudeMDPath, []byte(cleaned), 0644); err != nil {
+				return fmt.Errorf("rewriting CLAUDE.md: %w", err)
+			}
+			content = cleaned
+		} else {
+			return nil
+		}
 	}
 
 	f, err := os.OpenFile(claudeMDPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
@@ -249,21 +295,85 @@ func removeClaudeMDHint(home string) error {
 	}
 
 	content := string(data)
-	if !strings.Contains(content, "<!-- sauron -->") {
+	cleaned, ok := stripClaudeHint(content)
+	if !ok {
 		return nil
 	}
+	return os.WriteFile(claudeMDPath, []byte(cleaned), 0644)
+}
 
-	// Remove the block.
+func stripClaudeHint(content string) (string, bool) {
+	if !strings.Contains(content, "<!-- sauron -->") {
+		return content, false
+	}
 	start := strings.Index(content, "\n<!-- sauron -->")
 	if start == -1 {
 		start = strings.Index(content, "<!-- sauron -->")
 	}
 	end := strings.Index(content, "<!-- /sauron -->")
 	if end == -1 {
-		return nil
+		return content, false
 	}
 	end += len("<!-- /sauron -->")
+	return content[:start] + content[end:], true
+}
 
-	cleaned := content[:start] + content[end:]
-	return os.WriteFile(claudeMDPath, []byte(cleaned), 0644)
+func linkValinorBin(exePath string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(home, "go", "bin", "sauron")
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return fmt.Errorf("creating ~/go/bin: %w", err)
+	}
+	if same, _ := sameFile(dest, exePath); same {
+		fmt.Println("  Valinor bin: " + dest)
+		return nil
+	}
+	if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("replacing %s: %w", dest, err)
+	}
+	if err := os.Symlink(exePath, dest); err != nil {
+		return fmt.Errorf("linking %s: %w", dest, err)
+	}
+	return nil
+}
+
+func removeValinorLink(exePath string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	dest := filepath.Join(home, "go", "bin", "sauron")
+	info, err := os.Lstat(dest)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		return
+	}
+	if same, _ := sameFile(dest, exePath); !same {
+		return
+	}
+	_ = os.Remove(dest)
+}
+
+func sameFile(a, b string) (bool, error) {
+	if a == b {
+		return true, nil
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	if errA != nil || errB != nil {
+		return false, fmt.Errorf("resolve")
+	}
+	return ra == rb, nil
+}
+
+func removeCaptureAgent(home string) {
+	plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.sauron.capture.plist")
+	uid := strconv.Itoa(os.Getuid())
+	_ = exec.Command("launchctl", "bootout", "gui/"+uid+"/com.sauron.capture").Run()
+	_ = exec.Command("launchctl", "unload", plistPath).Run()
+	_ = os.Remove(plistPath)
+	// Exact process name only. Does not match the sauron daemon.
+	_ = exec.Command("pkill", "-x", "SauronCapture").Run()
 }

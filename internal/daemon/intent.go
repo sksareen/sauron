@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	intentPollInterval  = 10 * time.Second
-	defaultTraceWindow  = 30 // minutes
+	intentPollInterval = 10 * time.Second
+	defaultTraceWindow = 30 // minutes
 )
 
 // intentPoller watches for outcomes (git commits, agentgraph entries) and creates intent traces.

@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -23,13 +22,21 @@ import (
 	"github.com/sksareen/sauron/internal/store"
 )
 
-var version = "0.1.0"
+var version = "0.2.0"
 
 func main() {
+	if launchedFromAppBundle() {
+		if err := install.LaunchFromApp(); err != nil {
+			fmt.Fprintln(os.Stderr, "sauron:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	root := &cobra.Command{
 		Use:           "sauron",
 		Short:         "sauron — the eternal witness",
-		Long:          "sauron is a passive context daemon for macOS that captures clipboard, activity, and screenshots for AI agents.",
+		Long:          "sauron is a passive context daemon for macOS that records clipboard, apps, and git activity for Valinor and other agents. It does not capture the screen.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -301,119 +308,149 @@ func main() {
 	tracesCmd.Flags().IntVar(&tracesLimit, "limit", 10, "number of traces to show")
 	root.AddCommand(tracesCmd)
 
-	// ── capture (screenshot → annotate → route) ────────────────────────────────
+	// ── Valinor open loops (hints + reentry) ────────────────────────────────────
 
-	var captureRegister, captureSourceApp, captureBundleID string
-	var captureInstall, captureStart, captureStop bool
-	captureCmd := &cobra.Command{
-		Use:   "capture",
-		Short: "Interactive screenshot capture with annotation (Wispr Flow for screenshots)",
-		Long:  "Take a screenshot, annotate it, and route it to your active Claude Code session.\nRun 'sauron capture --install' to set up the background app and global hotkey (Ctrl+Shift+S).",
+	var hintsJSON bool
+	hintsCmd := &cobra.Command{
+		Use:   "hints",
+		Short: "Manual threads Valinor can show and stop",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			home, _ := os.UserHomeDir()
-			appPath := filepath.Join(home, ".sauron", "SauronCapture.app")
-			buildScript := filepath.Join(home, "coding", "sauron", "capture", "build.sh")
-
-			if captureRegister != "" {
-				// Register a screenshot file into the DB
-				db, err := store.Open()
-				if err != nil {
-					return err
-				}
-				defer db.Close()
-
-				sourceApp := captureSourceApp
-				if sourceApp == "" {
-					sourceApp = "SauronCapture"
-				}
-				bundleID := captureBundleID
-
-				ts := time.Now().Unix()
-				if err := store.InsertScreenshot(db, captureRegister, sourceApp, bundleID, "", ts); err != nil {
-					return fmt.Errorf("register screenshot: %w", err)
-				}
-				fmt.Printf("registered: %s\n", captureRegister)
-				return nil
+			db, err := store.Open()
+			if err != nil {
+				return err
 			}
-
-			if captureInstall {
-				// Build the app
-				fmt.Println("Building SauronCapture...")
-				build := exec.Command("bash", buildScript)
-				build.Stdout = os.Stdout
-				build.Stderr = os.Stderr
-				if err := build.Run(); err != nil {
-					return fmt.Errorf("build failed: %w", err)
-				}
-
-				// Create LaunchAgent for auto-start
-				plistPath := filepath.Join(home, "Library", "LaunchAgents", "com.sauron.capture.plist")
-				plist := fmt.Sprintf(`<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.sauron.capture</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>%s/Contents/MacOS/SauronCapture</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <false/>
-</dict>
-</plist>`, appPath)
-				if err := os.WriteFile(plistPath, []byte(plist), 0644); err != nil {
-					return fmt.Errorf("write LaunchAgent: %w", err)
-				}
-				fmt.Printf("LaunchAgent: %s\n", plistPath)
-				fmt.Println("SauronCapture installed. Starting...")
-
-				// Start it now
-				exec.Command("open", appPath).Run()
-				fmt.Println("Running. Global hotkey: Ctrl+Shift+S")
-				return nil
+			defer db.Close()
+			hints, err := store.ListManualHints(db)
+			if err != nil {
+				return err
 			}
-
-			if captureStop {
-				exec.Command("pkill", "-f", "SauronCapture").Run()
-				fmt.Println("SauronCapture stopped.")
-				return nil
-			}
-
-			if captureStart {
-				exec.Command("open", appPath).Run()
-				fmt.Println("SauronCapture started. Global hotkey: Ctrl+Shift+S")
-				return nil
-			}
-
-			// Default: one-shot capture (build if needed, then open)
-			if _, err := os.Stat(appPath); os.IsNotExist(err) {
-				fmt.Println("First run — building SauronCapture...")
-				build := exec.Command("bash", buildScript)
-				build.Stdout = os.Stdout
-				build.Stderr = os.Stderr
-				if err := build.Run(); err != nil {
-					return fmt.Errorf("build failed: %w", err)
-				}
-			}
-			return exec.Command("open", appPath).Run()
+			fmt.Println(query.FormatHints(hints, formatFlag(hintsJSON, false)))
+			return nil
 		},
 	}
-	captureCmd.Flags().StringVar(&captureRegister, "register", "", "register a screenshot file path in the DB")
-	captureCmd.Flags().StringVar(&captureSourceApp, "source-app", "", "source app name (used with --register)")
-	captureCmd.Flags().StringVar(&captureBundleID, "bundle-id", "", "source bundle ID (used with --register)")
-	captureCmd.Flags().BoolVar(&captureInstall, "install", false, "build and install SauronCapture with auto-start")
-	captureCmd.Flags().BoolVar(&captureStart, "start", false, "start SauronCapture")
-	captureCmd.Flags().BoolVar(&captureStop, "stop", false, "stop SauronCapture")
-	root.AddCommand(captureCmd)
+	hintsCmd.Flags().BoolVar(&hintsJSON, "json", false, "JSON output")
+	root.AddCommand(hintsCmd)
+
+	var hintStartLabel string
+	hintCmd := &cobra.Command{
+		Use:   "hint",
+		Short: "Start or stop a manual thread",
+	}
+	hintStartCmd := &cobra.Command{
+		Use:   "start <label>",
+		Short: "Start a manual thread Valinor can display",
+		Args:  cobra.MinimumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			label := strings.Join(args, " ")
+			if hintStartLabel != "" {
+				label = hintStartLabel
+			}
+			id := fmt.Sprintf("hint-%d", time.Now().UnixNano())
+			if !query.ValinorTaskID(id) {
+				return fmt.Errorf("generated hint id is invalid")
+			}
+			db, err := store.Open()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			if err := store.StartManualHint(db, id, label); err != nil {
+				return err
+			}
+			fmt.Printf("{\"ok\":true,\"id\":%q}\n", id)
+			return nil
+		},
+	}
+	hintStartCmd.Flags().StringVar(&hintStartLabel, "label", "", "thread label")
+	hintCmd.AddCommand(hintStartCmd)
+
+	hintStopCmd := &cobra.Command{
+		Use:   "stop <hint_id>",
+		Short: "Stop a manual thread",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := args[0]
+			if !query.ValinorTaskID(id) {
+				return fmt.Errorf("invalid hint id")
+			}
+			db, err := store.Open()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			if err := store.StopManualHint(db, id); err != nil {
+				return err
+			}
+			fmt.Println(`{"ok":true}`)
+			return nil
+		},
+	}
+	var hintStopJSON bool
+	hintStopCmd.Flags().BoolVar(&hintStopJSON, "json", false, "JSON output")
+	hintCmd.AddCommand(hintStopCmd)
+	root.AddCommand(hintCmd)
+
+	var reentryJSON bool
+	reentryCmd := &cobra.Command{
+		Use:   "reentry",
+		Short: "Inferred unfinished thread for Valinor",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := store.Open()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			re, err := query.BuildReentry(db, time.Now())
+			if err != nil {
+				return err
+			}
+			format := "human"
+			if reentryJSON {
+				format = "json"
+			}
+			fmt.Println(query.FormatReentry(re, format))
+			return nil
+		},
+	}
+	reentryCmd.Flags().BoolVar(&reentryJSON, "json", false, "JSON output")
+	root.AddCommand(reentryCmd)
+
+	taskCmd := &cobra.Command{
+		Use:   "task",
+		Short: "Update an inferred open thread",
+	}
+	var taskCompleteJSON bool
+	taskCompleteCmd := &cobra.Command{
+		Use:   "complete <task_id>",
+		Short: "Mark an inferred thread done",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id := args[0]
+			if !query.ValinorTaskID(id) {
+				return fmt.Errorf("invalid task id")
+			}
+			db, err := store.Open()
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			if err := store.CompleteTask(db, id); err != nil {
+				return err
+			}
+			fmt.Println(`{"ok":true}`)
+			_ = taskCompleteJSON
+			return nil
+		},
+	}
+	taskCompleteCmd.Flags().BoolVar(&taskCompleteJSON, "json", false, "JSON output")
+	taskCmd.AddCommand(taskCompleteCmd)
+	root.AddCommand(taskCmd)
 
 	// ── experience graph ──────────────────────────────────────────────────────
 
 	expCmd := &cobra.Command{
-		Use:   "experience",
-		Short: "Agent experience graph commands",
+		Use:     "experience",
+		Short:   "Agent experience graph commands",
 		Aliases: []string{"exp"},
 	}
 
@@ -641,6 +678,21 @@ func migrateAgentGraph() error {
 	}
 	fmt.Println()
 	return rows.Err()
+}
+
+func launchedFromAppBundle() bool {
+	exe, err := os.Executable()
+	if err != nil || !strings.Contains(exe, ".app/Contents/MacOS/") {
+		return false
+	}
+	for _, arg := range os.Args[1:] {
+		// Older macOS passed -psn_ when opening an app bundle. Anything else
+		// is a real CLI invocation of the binary inside the bundle.
+		if !strings.HasPrefix(arg, "-psn_") {
+			return false
+		}
+	}
+	return true
 }
 
 // formatFlag returns "json", "md", or "human" based on flags.

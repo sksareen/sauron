@@ -59,18 +59,6 @@ VALUES (?, ?, ?, ?, ?)`
 	return nil
 }
 
-// InsertScreenshot records a captured screenshot path.
-func InsertScreenshot(db *DB, filePath, sourceApp, bundleID, windowTitle string, capturedAt int64) error {
-	const q = `
-INSERT INTO screenshots (file_path, source_app, bundle_id, window_title, captured_at)
-VALUES (?, ?, ?, ?, ?)`
-	_, err := db.Exec(q, filePath, sourceApp, bundleID, windowTitle, capturedAt)
-	if err != nil {
-		return fmt.Errorf("insert screenshot: %w", err)
-	}
-	return nil
-}
-
 // InsertIntentTrace records a new intent trace.
 func InsertIntentTrace(db *DB, t *IntentTrace) error {
 	const q = `

@@ -19,6 +19,9 @@ func GetClipboard(db *store.DB, n int) ([]store.ClipboardItem, error) {
 func FormatClipboard(items []store.ClipboardItem, format string) string {
 	switch format {
 	case "json":
+		if items == nil {
+			items = []store.ClipboardItem{}
+		}
 		b, _ := json.MarshalIndent(items, "", "  ")
 		return string(b)
 	case "md":

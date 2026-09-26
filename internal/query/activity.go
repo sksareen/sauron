@@ -10,11 +10,11 @@ import (
 
 // ActivitySummary is an aggregated view of activity over a time window.
 type ActivitySummary struct {
-	Hours      float64            `json:"hours"`
-	FocusScore float64            `json:"focus_score"`
+	Hours        float64            `json:"hours"`
+	FocusScore   float64            `json:"focus_score"`
 	AppBreakdown map[string]float64 `json:"app_breakdown"` // app -> minutes
-	TotalApps  int                `json:"total_apps"`
-	Switches   int                `json:"switches"`
+	TotalApps    int                `json:"total_apps"`
+	Switches     int                `json:"switches"`
 }
 
 // GetActivity returns an activity summary for the last h hours.

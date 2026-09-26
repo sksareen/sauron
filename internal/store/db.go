@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS context_sessions (
     dominant_app TEXT
 );
 
+-- Retained so databases created by older builds still open. Nothing writes it.
 CREATE TABLE IF NOT EXISTS screenshots (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     file_path    TEXT NOT NULL,
@@ -103,6 +104,19 @@ CREATE TABLE IF NOT EXISTS experiences (
 
 CREATE INDEX IF NOT EXISTS idx_experiences_outcome    ON experiences(outcome);
 CREATE INDEX IF NOT EXISTS idx_experiences_created_at ON experiences(created_at);
+
+CREATE TABLE IF NOT EXISTS completed_tasks (
+    task_id      TEXT PRIMARY KEY,
+    completed_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS manual_hints (
+    id         TEXT PRIMARY KEY,
+    source     TEXT NOT NULL DEFAULT 'manual',
+    label      TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'active',
+    updated_at INTEGER NOT NULL
+);
 
 CREATE TRIGGER IF NOT EXISTS clipboard_fts_update
 AFTER UPDATE ON clipboard_history BEGIN

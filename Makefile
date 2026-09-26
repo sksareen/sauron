@@ -1,4 +1,4 @@
-VERSION ?= 0.1.0
+VERSION ?= 0.2.0
 
 build:
 	go build -ldflags "-X main.version=$(VERSION)" -o sauron ./cmd/sauron
@@ -13,8 +13,11 @@ release:
 	GOOS=darwin GOARCH=arm64 go build -ldflags "-X main.version=$(VERSION)" -o dist/sauron-darwin-arm64 ./cmd/sauron
 	GOOS=darwin GOARCH=amd64 go build -ldflags "-X main.version=$(VERSION)" -o dist/sauron-darwin-amd64 ./cmd/sauron
 
+dmg:
+	VERSION=$(VERSION) ./package.sh
+
 clean:
 	rm -f sauron
 	rm -rf dist/
 
-.PHONY: build install-local release clean
+.PHONY: build install-local release dmg clean

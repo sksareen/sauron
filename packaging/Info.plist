@@ -3,26 +3,24 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>SauronCapture</string>
+    <string>Sauron</string>
     <key>CFBundleDisplayName</key>
-    <string>Sauron Capture</string>
+    <string>Sauron</string>
     <key>CFBundleIdentifier</key>
-    <string>com.sauron.capture</string>
+    <string>com.sauron.app</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>__VERSION__</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>__VERSION__</string>
     <key>CFBundleExecutable</key>
-    <string>SauronCapture</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
+    <string>Sauron</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <key>LSUIElement</key>
-    <true/>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>SauronCapture needs to detect the active application for screenshot context.</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.developer-tools</string>
 </dict>
 </plist>

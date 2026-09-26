@@ -11,14 +11,13 @@ import (
 // clipboardPoller watches the clipboard and inserts new entries into the DB.
 type clipboardPoller struct {
 	db       *store.DB
-	ss       *Screenshotter
 	lastSeen string
 }
 
 // runClipboardPoller polls the clipboard every second.
 // It returns when ctx is cancelled.
-func runClipboardPoller(ctx context.Context, db *store.DB, ss *Screenshotter) {
-	p := &clipboardPoller{db: db, ss: ss}
+func runClipboardPoller(ctx context.Context, db *store.DB) {
+	p := &clipboardPoller{db: db}
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
@@ -53,10 +52,5 @@ func (p *clipboardPoller) poll() {
 
 	if err := store.InsertClipboard(p.db, content, "text", appName, bundleID, windowTitle); err != nil {
 		log.Printf("clipboard: insert failed: %v", err)
-	}
-
-	// Screenshot on clipboard change.
-	if p.ss != nil {
-		go p.ss.Capture("clipboard")
 	}
 }
